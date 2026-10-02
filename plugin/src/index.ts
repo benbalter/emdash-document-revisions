@@ -10,7 +10,7 @@
  * inject site routes:
  * - documentRevisions(): the EmDash plugin (admin panel + page, lifecycle hooks)
  * - documentRevisionsRoutes(): an Astro integration that injects the
- *   permalink route and the /_emdash/api/document-revisions/* API
+ *   permalink route and the document APIs (see routes/)
  *
  * Usage in astro.config.mjs:
  *   import { documentRevisions, documentRevisionsRoutes } from "emdash-document-revisions";
@@ -37,7 +37,10 @@ export function createPlugin() {
 		capabilities: ["content:read"],
 		admin: {
 			entry: `${PACKAGE}/admin`,
-			pages: [{ path: "/new", label: "Upload document", icon: "upload-simple" }],
+			pages: [
+				{ path: "/new", label: "Upload document", icon: "upload-simple" },
+				{ path: "/storage", label: "Document storage", icon: "hard-drives" },
+			],
 		},
 		hooks: {
 			/** Keep the slug → entry index current so renamed documents keep resolving. */
@@ -63,6 +66,8 @@ export function createPlugin() {
 				ctx.log.info("Deleted document files", { entryId: event.id, objects: deleted });
 			},
 
+			// EmDash only runs this for marketplace/registry installs; native
+			// sites use the Document storage page (routes/api.ts) instead.
 			"plugin:uninstall": async (event, ctx) => {
 				if (!event.deleteData) return;
 				const deleted = await deleteAll(await bucket());
@@ -86,7 +91,7 @@ export function documentRevisions(): PluginDescriptor {
 	};
 }
 
-/** Injects the permalink route and the document API. */
+/** Injects the permalink route and the document APIs. */
 export function documentRevisionsRoutes(): AstroIntegration {
 	return {
 		name: PACKAGE,
@@ -95,6 +100,13 @@ export function documentRevisionsRoutes(): AstroIntegration {
 				injectRoute({
 					pattern: "/documents/[...path]",
 					entrypoint: `${PACKAGE}/routes/document.ts`,
+					prerender: false,
+				});
+				// Under core's content namespace so API-token scopes map like
+				// core content routes (content:read / content:write).
+				injectRoute({
+					pattern: "/_emdash/api/content/documents/[id]/files/[...action]",
+					entrypoint: `${PACKAGE}/routes/files.ts`,
 					prerender: false,
 				});
 				injectRoute({

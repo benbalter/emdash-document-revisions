@@ -7,7 +7,9 @@
   "exports": {
     ".": "./src/index.ts",
     "./admin": "./src/admin.tsx",
+    "./visibility": "./src/visibility.ts",
     "./routes/document.ts": "./src/routes/document.ts",
+    "./routes/files.ts": "./src/routes/files.ts",
     "./routes/api.ts": "./src/routes/api.ts"
   },
   "files": [

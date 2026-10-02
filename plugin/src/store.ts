@@ -153,6 +153,34 @@ export async function deleteEntry(b: R2Bucket, entryId: string): Promise<number>
 	return deletePrefix(b, entryPrefix(entryId));
 }
 
+/** Entry IDs that have anything stored, from R2's delimited listing. */
+export async function listStoredEntryIds(b: R2Bucket): Promise<string[]> {
+	const ids: string[] = [];
+	let cursor: string | undefined;
+	do {
+		const page = await b.list({ prefix: "entries/", delimiter: "/", cursor, limit: 1000 });
+		for (const p of page.delimitedPrefixes) ids.push(p.slice("entries/".length, -1));
+		cursor = page.truncated ? page.cursor : undefined;
+	} while (cursor);
+	return ids;
+}
+
+/** Object count and bytes under a prefix. */
+export async function usage(b: R2Bucket, prefix: string): Promise<{ objects: number; bytes: number }> {
+	let objects = 0;
+	let bytes = 0;
+	let cursor: string | undefined;
+	do {
+		const page = await b.list({ prefix, cursor, limit: 1000 });
+		for (const o of page.objects) {
+			objects++;
+			bytes += o.size;
+		}
+		cursor = page.truncated ? page.cursor : undefined;
+	} while (cursor);
+	return { objects, bytes };
+}
+
 /** Remove everything the plugin ever stored. Used on uninstall. */
 export async function deleteAll(b: R2Bucket): Promise<number> {
 	return (await deletePrefix(b, "entries/")) + (await deletePrefix(b, "slugs/"));

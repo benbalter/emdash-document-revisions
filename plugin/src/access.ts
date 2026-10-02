@@ -117,6 +117,17 @@ export function fileAccess(
 	return canReadDrafts(user) ? "allow" : "deny";
 }
 
+/**
+ * Raised when core's lock table can't be read (e.g. a future EmDash release
+ * renames it). Writes fail closed rather than silently skipping the check.
+ */
+export class LockCheckUnavailable extends Error {
+	constructor(cause: unknown) {
+		super("Can't verify the document's edit lock; refusing the change. Check EmDash compatibility.");
+		this.cause = cause;
+	}
+}
+
 export interface LockHolder {
 	userId: string;
 	userName: string | null;
@@ -130,7 +141,7 @@ export interface LockHolder {
  */
 export async function liveLock(locals: Locals, entryId: string): Promise<LockHolder | null> {
 	const db = locals.emdash?.db;
-	if (!db) return null;
+	if (!db) throw new LockCheckUnavailable(new Error("No database on locals"));
 	const rows = await db
 		.selectFrom("_emdash_entry_locks")
 		.innerJoin("_emdash_collections", "_emdash_collections.slug", "_emdash_entry_locks.collection")
@@ -143,7 +154,10 @@ export async function liveLock(locals: Locals, entryId: string): Promise<LockHol
 		.where("_emdash_entry_locks.collection", "=", COLLECTION)
 		.where("_emdash_entry_locks.entry_id", "=", entryId)
 		.where("_emdash_collections.edit_locking", "!=", 0)
-		.execute();
+		.execute()
+		.catch((e: unknown) => {
+			throw new LockCheckUnavailable(e);
+		});
 	const now = Date.now();
 	const live = rows.find((r) => Date.parse(String(r.expiresAt)) > now);
 	return live
@@ -178,7 +192,7 @@ export async function lockedByOther(
  * plaintext), so this trades hash strength for headroom. The count is
  * stored with each hash, so it can be raised without breaking old ones.
  */
-const PBKDF2_ITERATIONS = 20_000;
+const DEFAULT_PBKDF2_ITERATIONS = 20_000;
 /** What hashes written before the count was stored used. */
 const LEGACY_PBKDF2_ITERATIONS = 60_000;
 const COOKIE_MAX_AGE = 10 * 24 * 60 * 60; // WordPress's post-password cookie lifetime.
@@ -215,11 +229,23 @@ export async function hashPassword(
 	password: string,
 ): Promise<{ passwordHash: string; salt: string; iterations: number }> {
 	const salt = crypto.getRandomValues(new Uint8Array(16));
+	const iterations = await configuredIterations();
 	return {
-		passwordHash: await pbkdf2(password, salt, PBKDF2_ITERATIONS),
+		passwordHash: await pbkdf2(password, salt, iterations),
 		salt: b64url(salt),
-		iterations: PBKDF2_ITERATIONS,
+		iterations,
 	};
+}
+
+/**
+ * Sites on Workers Paid have far more CPU per request and can raise the cost
+ * with DOCUMENT_PASSWORD_ITERATIONS. Clamped to workerd's PBKDF2 ceiling.
+ */
+async function configuredIterations(): Promise<number> {
+	const { env } = await import("cloudflare:workers");
+	const raw = Number((env as Record<string, unknown>).DOCUMENT_PASSWORD_ITERATIONS);
+	if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_PBKDF2_ITERATIONS;
+	return Math.min(100_000, Math.max(10_000, Math.floor(raw)));
 }
 
 function timingSafeEqual(a: string, b: string): boolean {

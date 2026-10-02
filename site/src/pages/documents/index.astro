@@ -1,0 +1,36 @@
+---
+/**
+ * Public document library. EmDash's queries don't know about document
+ * visibility (it lives in the plugin's private manifest), so filter before
+ * rendering: private and password-protected titles must not be listed.
+ */
+import { getEmDashCollection } from "emdash";
+import { filterPublicDocuments } from "emdash-document-revisions/visibility";
+import Base from "../../layouts/Base.astro";
+
+const { entries } = await getEmDashCollection("documents", {
+	orderBy: { published_at: "desc" },
+	limit: 50,
+});
+const documents = await filterPublicDocuments(entries);
+// Listings depend on visibility, which EmDash's cache hints can't see.
+Astro.response.headers.set("Cache-Control", "private, no-store");
+---
+
+<Base title="Documents">
+	<h1>Documents</h1>
+	{
+		documents.length === 0 ? (
+			<p>No documents yet.</p>
+		) : (
+			<ul>
+				{documents.map((doc) => (
+					<li>
+						<a href={`/documents/${doc.id}`}>{doc.data.title}</a>
+						{doc.data.summary && <p>{doc.data.summary}</p>}
+					</li>
+				))}
+			</ul>
+		)
+	}
+</Base>

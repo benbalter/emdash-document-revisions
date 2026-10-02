@@ -25,6 +25,7 @@ DEV=dev@emdash.local
 OTHER=verify-other
 cleanup() {
 	role 50 >/dev/null
+	sql "alter table _emdash_entry_locks_verify rename to _emdash_entry_locks;" 2>/dev/null
 	sql "update _emdash_collections set edit_locking=1 where slug='documents'; delete from _emdash_entry_locks where token='verify';"
 	rm -rf "$TMP"
 }
@@ -66,16 +67,16 @@ publish() { as -H 'Content-Type: application/json' -X POST "$CONTENT/$1/publish"
 upload() { # id file content-type filename [extra curl args]
 	local id=$1 file=$2 type=$3 name=$4; shift 4
 	curl -s -o "$TMP/last" -w '%{http_code}' -b "$TMP/jar" -H "$H" -H "Content-Type: $type" \
-		--data-binary "@$file" "$@" "$API/upload?entryId=$id&filename=$name"
+		--data-binary "@$file" "$@" "$CONTENT/$id/files?filename=$name"
 }
 # JSON bodies come from printf: inline {"a":1,"b":2} inside $(...) gets
 # brace-expanded by bash into separate words.
-restore_body() { printf '{"entryId":"%s","n":%s}' "$1" "$2"; }
-vis_body() { printf '{"entryId":"%s","mode":"%s","password":"%s"}' "$1" "$2" "${3:-}"; }
-post() { # action json -> http code
+post() { # url json -> http code
 	curl -s -o "$TMP/last" -w '%{http_code}' -b "$TMP/jar" -H "$H" -H 'Content-Type: application/json' \
-		-X POST "$API/$1" -d "$2"
+		-X POST "$1" -d "$2"
 }
+restore() { post "$CONTENT/$1/files/restore" "$(printf '{"n":%s}' "$2")"; }
+setvis() { post "$CONTENT/$1/files/visibility" "$(printf '{"mode":"%s","password":"%s"}' "$2" "${3:-}")"; }
 
 role 50
 dev_id=$(sql "select id from users where email='$DEV'")
@@ -109,10 +110,10 @@ check "revision 1, admin" one "$(curl -s -b "$TMP/jar" "$B/documents/$P-revision
 check "unknown revision" 404 "$(code -b "$TMP/jar" "$B/documents/$P-revision-99.txt")"
 check "bad path shape" 404 "$(code "$B/documents/a/b")"
 check "revision log hides storage keys" 0 \
-	"$(as "$API/revisions?entryId=$P_ID" | grep -c '"key"')"
+	"$(as "$CONTENT/$P_ID/files" | grep -c '"key"')"
 as -H 'Content-Type: application/json' -X PUT "$CONTENT/$P_ID" -d '{"data":{"title":"Verify renamed"}}' >/dev/null
 check "revision log includes core field edits, ISO-dated" yes \
-	"$(as "$API/revisions?entryId=$P_ID" | python3 -c 'import json,sys; e=json.load(sys.stdin)["data"]["edits"]; print("yes" if e and all(x["createdAt"].endswith("Z") for x in e) else "no")')"
+	"$(as "$CONTENT/$P_ID/files" | python3 -c 'import json,sys; e=json.load(sys.stdin)["data"]["edits"]; print("yes" if e and all(x["createdAt"].endswith("Z") for x in e) else "no")')"
 
 echo "Dotted slugs"
 DOT=verify.$RUN
@@ -133,19 +134,19 @@ check "over 100 MiB" 413 "$(upload "$P_ID" "$TMP/101m.bin" application/octet-str
 rm -f "$TMP/101m.bin"
 
 echo "Restore"
-check "restore revision 1" 201 "$(post restore "$(restore_body "$P_ID" 1)")"
+check "restore revision 1" 201 "$(restore "$P_ID" 1)"
 check "restored file is current" one "$(curl -s "$B/documents/$P")"
 check "restore records its source" 1 \
-	"$(as "$API/revisions?entryId=$P_ID" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["revisions"][0]["restoredFrom"])')"
-check "restore unknown revision" 404 "$(post restore "$(restore_body "$P_ID" 99)")"
+	"$(as "$CONTENT/$P_ID/files" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["revisions"][0]["restoredFrom"])')"
+check "restore unknown revision" 404 "$(restore "$P_ID" 99)"
 
 echo "Core edit lock"
 now=$(python3 -c 'import datetime as d; t=d.datetime.now(d.timezone.utc); print(t.isoformat(timespec="milliseconds").replace("+00:00","Z"), (t+d.timedelta(minutes=5)).isoformat(timespec="milliseconds").replace("+00:00","Z"))')
 read -r acquired expires <<<"$now"
 sql "insert into _emdash_entry_locks (collection, entry_id, user_id, token, acquired_at, expires_at) values ('documents', '$P_ID', '$OTHER', 'verify', '$acquired', '$expires');"
 check "upload while another user holds the lock" 409 "$(upload "$P_ID" "$TMP/one.txt" text/plain one.txt)"
-check "restore while locked" 409 "$(post restore "$(restore_body "$P_ID" 1)")"
-check "visibility while locked" 409 "$(post visibility "$(vis_body "$P_ID" private)")"
+check "restore while locked" 409 "$(restore "$P_ID" 1)"
+check "visibility while locked" 409 "$(setvis "$P_ID" private)"
 sql "delete from _emdash_entry_locks where entry_id='$P_ID';"
 as -H 'Content-Type: application/json' -X POST "$CONTENT/$P_ID/lock" -d '{}' >/dev/null
 check "upload while holding the lock yourself" 201 "$(upload "$P_ID" "$TMP/one.txt" text/plain one.txt)"
@@ -163,17 +164,17 @@ publish "$O_ID"
 sql "update ec_documents set author_id='$OTHER' where id='$O_ID';"
 role 30
 check "author uploading to another's document" 403 "$(upload "$O_ID" "$TMP/one.txt" text/plain one.txt)"
-check "author restoring on another's document" 403 "$(post restore "$(restore_body "$O_ID" 1)")"
+check "author restoring on another's document" 403 "$(restore "$O_ID" 1)"
 role 40
 check "editor uploading to another's document" 201 "$(upload "$O_ID" "$TMP/one.txt" text/plain one.txt)"
 
 echo "Private documents"
 role 50
-check "set private" 200 "$(post visibility "$(vis_body "$O_ID" private)")"
+check "set private" 200 "$(setvis "$O_ID" private)"
 check "private, anonymous" 404 "$(code "$B/documents/$O")"
 role 10; check "private, subscriber" 404 "$(code -b "$TMP/jar" "$B/documents/$O")"
 role 20; check "private, contributor (not author)" 404 "$(code -b "$TMP/jar" "$B/documents/$O")"
-check "private revision log, contributor" 403 "$(code -b "$TMP/jar" "$API/revisions?entryId=$O_ID")"
+check "private revision log, contributor" 403 "$(code -b "$TMP/jar" "$CONTENT/$O_ID/files")"
 role 30; check "private, author role (not this document's author)" 404 "$(code -b "$TMP/jar" "$B/documents/$O")"
 role 40; check "private, editor" 200 "$(code -b "$TMP/jar" "$B/documents/$O")"
 check "private is never publicly cacheable" "private, no-store" \
@@ -184,8 +185,8 @@ role 20; check "private, its own author at contributor level" 200 "$(code -b "$T
 role 50
 
 echo "Password-protected documents"
-check "password mode needs a password" 400 "$(post visibility "$(vis_body "$P_ID" password)")"
-check "set password" 200 "$(post visibility "$(vis_body "$P_ID" password pw-one)")"
+check "password mode needs a password" 400 "$(setvis "$P_ID" password)"
+check "set password" 200 "$(setvis "$P_ID" password pw-one)"
 check "anonymous gets the password form" 401 "$(code "$B/documents/$P")"
 check "wrong password" 401 "$(code -X POST --data-urlencode password=nope "$B/documents/$P")"
 check "cross-site form post" 403 \
@@ -202,10 +203,10 @@ check "subscriber with cookie" 200 "$(code -b "$TMP/both" "$B/documents/$P")"
 role 50
 check "cookie doesn't open past revisions" 404 "$(code -b "$TMP/pw" "$B/documents/$P-revision-1.txt")"
 check "editor needs no password" 200 "$(code -b "$TMP/jar" "$B/documents/$P")"
-check "password log hides the hash" 0 "$(as "$API/revisions?entryId=$P_ID" | grep -c 'passwordHash')"
-check "change password" 200 "$(post visibility "$(vis_body "$P_ID" password pw-two)")"
+check "password log hides the hash" 0 "$(as "$CONTENT/$P_ID/files" | grep -c 'passwordHash')"
+check "change password" 200 "$(setvis "$P_ID" password pw-two)"
 check "old cookie stops working" 401 "$(code -b "$TMP/pw" "$B/documents/$P")"
-check "back to public" 200 "$(post visibility "$(vis_body "$P_ID" public)")"
+check "back to public" 200 "$(setvis "$P_ID" public)"
 check "public again" 200 "$(code "$B/documents/$P")"
 
 echo "Trash, restore, permanent delete"
@@ -231,7 +232,7 @@ check "recycled slug with no files" 404 "$(code "$B/documents/$T")"
 
 echo "Plumbing"
 check "write without CSRF header" 403 \
-	"$(curl -s -o /dev/null -w '%{http_code}' -b "$TMP/jar" -X POST "$API/restore" -d '{}')"
+	"$(curl -s -o /dev/null -w '%{http_code}' -b "$TMP/jar" -X POST "$CONTENT/$P_ID/files/restore" -d '{}')"
 check "anonymous API" 401 "$(code "$API/me")"
 check "old plugin upload route is gone" 404 \
 	"$(curl -s -o /dev/null -w '%{http_code}' -b "$TMP/jar" -H "$H" -X POST "$B/_emdash/api/plugins/document-revisions/upload")"
@@ -241,19 +242,57 @@ role 30; check "author can create documents" True \
 	"$(as "$API/me" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["canCreate"])')"
 role 50
 
-echo "API tokens (core's fail-closed scope rules)"
+echo "Private titles stay out of public listings"
+check "public search never returns documents" 0 \
+	"$(curl -s "$B/_emdash/api/search?q=Verify" | python3 -c 'import json,sys; print(sum(i["collection"]=="documents" for i in json.load(sys.stdin)["data"]["items"]))')"
+check "listing page shows a public document" 1 "$(curl -s "$B/documents" | grep -c "href=\"/documents/$P\"")"
+setvis "$P_ID" password lp >/dev/null
+check "listing page hides a password-protected document" 0 "$(curl -s "$B/documents" | grep -c "href=\"/documents/$P\"")"
+setvis "$P_ID" public >/dev/null
+check "listing page hides a private document" 0 "$(curl -s "$B/documents" | grep -c "href=\"/documents/$O\"")"
+
+echo "Storage admin (stands in for plugin:uninstall)"
+role 40
+check "storage admin, editor" 403 "$(code -b "$TMP/jar" "$API/storage")"
+role 50
+ORPH=verify-orphan-$RUN
+ORPH_ID=$(create "$ORPH" "Orphan $RUN")
+upload "$ORPH_ID" "$TMP/one.txt" text/plain one.txt >/dev/null
+# Simulate a document deleted while the plugin was off: the row vanishes, no hook runs.
+sql "delete from ec_documents where id='$ORPH_ID';"
+check "orphan detected" yes \
+	"$(as "$API/storage" | python3 -c 'import json,sys; print("yes" if json.load(sys.stdin)["data"]["orphans"] >= 1 else "no")')"
+check "purge orphans" 200 "$(post "$API/purge-orphans" '{}')"
+check "orphan's files are gone" 0 "$(r2count "entries/$ORPH_ID/")"
+check "live documents untouched by orphan purge" yes \
+	"$([[ $(r2count "entries/$P_ID/") -gt 0 ]] && echo yes || echo no)"
+check "purge-all without confirmation" 400 "$(post "$API/purge-all" '{"confirm":"yes"}')"
+
+echo "Lock check fails closed"
+sql "alter table _emdash_entry_locks rename to _emdash_entry_locks_verify;"
+check "upload when the lock table is unreadable" 503 "$(upload "$P_ID" "$TMP/one.txt" text/plain one.txt)"
+check "log still readable" 200 "$(code -b "$TMP/jar" "$CONTENT/$P_ID/files")"
+sql "alter table _emdash_entry_locks_verify rename to _emdash_entry_locks;"
+check "upload once the table is back" 201 "$(upload "$P_ID" "$TMP/one.txt" text/plain one.txt)"
+
+echo "API tokens (scopes map like core content routes)"
 mktoken() {
 	as -H 'Content-Type: application/json' -X POST "$B/_emdash/api/admin/api-tokens" \
 		-d "$(printf '{"name":"verify-%s","scopes":["%s"]}' "$1" "$1")" |
 		python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["token"])'
 }
 read_token=$(mktoken content:read)
+write_token=$(mktoken content:write)
 admin_token=$(mktoken admin)
-check "content:read token can't read" 403 \
-	"$(code -H "Authorization: Bearer $read_token" "$API/revisions?entryId=$P_ID")"
+check "content:read token reads the log" 200 \
+	"$(code -H "Authorization: Bearer $read_token" "$CONTENT/$P_ID/files")"
 check "content:read token can't write" 403 \
-	"$(code -H "Authorization: Bearer $read_token" -H 'Content-Type: application/json' -X POST "$API/restore" -d "$(restore_body "$P_ID" 1)")"
-check "admin token can" 200 "$(code -H "Authorization: Bearer $admin_token" "$API/revisions?entryId=$P_ID")"
+	"$(code -H "Authorization: Bearer $read_token" -H 'Content-Type: application/json' -X POST "$CONTENT/$P_ID/files/restore" -d '{"n":1}')"
+check "content:write token uploads" 201 \
+	"$(code -H "Authorization: Bearer $write_token" -H 'Content-Type: text/plain' --data-binary "@$TMP/one.txt" "$CONTENT/$P_ID/files?filename=token.txt")"
+check "content:write token can't reach storage admin" 403 \
+	"$(code -H "Authorization: Bearer $write_token" "$API/storage")"
+check "admin token reaches storage admin" 200 "$(code -H "Authorization: Bearer $admin_token" "$API/storage")"
 
 echo
 echo "$pass passed, $fail failed"

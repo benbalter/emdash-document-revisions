@@ -4,17 +4,15 @@ This lists what's left between this port and [WP Document Revisions](https://git
 
 ## Gaps found while building core parity
 
-These came out of the core work. Some are platform limits.
+Addressed so far: private titles kept out of public search and listings, uninstall cleanup (the **Document storage** page), the lock check failing closed, and `content:*` API tokens. See the README's [platform constraints](README.md#platform-constraints). The upstream changes that would remove the workarounds are drafted in [docs/upstream-requests.md](docs/upstream-requests.md).
 
 | Gap | Why | Proposed fix | Est. |
 |---|---|---|---|
-| **Private and password-protected titles appear in public search** | `/_emdash/api/search` and the public query API list any published entry's title and summary. Visibility only gates the *file*. | Hide non-public documents from public reads. Options: core's `hooks.content-policy:register` (check whether it covers reads), store visibility in a content field and filter in site templates, or keep restricted documents unpublished. | 2h |
-| **No email when someone takes over your lock** | WordPress emails the previous holder on a lock takeover. Core's takeover fires no hook. | Upstream: ask EmDash for an `entry:lockTakeover` hook. Until then, poll from the panel and warn in-app. | 1h after the hook exists |
-| **Uninstall cleanup never runs** | EmDash only calls `plugin:uninstall` for marketplace and registry plugins, not native ones registered in `astro.config`. | Add a "Delete all document files" admin action (Admin only, with confirmation), or document `wrangler r2 object delete`. | 1h |
+| **No email when someone takes over your lock** | WordPress emails the previous holder on a lock takeover. Core's takeover fires no hook. | Upstream request #2. Until then, the panel could poll and warn in-app. | 1h after the hook exists |
 | **Files over 100 MB** | Cloudflare rejects request bodies over the plan limit before the Worker runs (about 100 MB on Free and Pro, more on Business and Enterprise). | R2 multipart uploads: create, upload parts in ~50 MB chunks from the panel, complete. Or presigned S3-API URLs straight to R2. | 2–3h |
 | **First-write race on a new manifest** | The first manifest write is unconditional, so two simultaneous first uploads can drop one. | Use R2's `onlyIf: { etagDoesNotMatch: "*" }`, if R2 supports it, or write a sentinel object first. | 30m |
-| **Lock check reads core's private table** | Core exposes no lock handler outside its own routes. | Upstream: export `handleEntryLockRead`, or expose it on `locals.emdash`. | — |
 | **Visibility isn't versioned** | Visibility lives in the manifest, not in the entry's fields, so a password can't leak through content APIs. As a result, EmDash's revisions don't record visibility changes. | Log visibility changes as timeline events in the manifest. | 30m |
+| **Public documents aren't in site search** | The collection's `search` is off so that private titles can't leak. That also leaves public documents out of public search. | Upstream request #4, or a plugin-owned public search route that filters by visibility. | 2h |
 
 ## Front end and integration
 

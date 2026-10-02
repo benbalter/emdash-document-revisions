@@ -1,323 +1,97 @@
 /// <reference types="emdash/locals" />
 /**
- * Document API: /_emdash/api/document-revisions/{revisions,upload,restore,visibility,me}
+ * Site-wide document API:
  *
- * Lives under /_emdash/api (injected by documentRevisionsRoutes()) rather
- * than as plugin routes, so that:
- * - EmDash's middleware still authenticates every request and enforces the
- *   X-EmDash-Request CSRF header on writes, exactly as for core routes;
- * - uploads stream into R2 instead of being buffered under the 8 MiB plugin
- *   route cap; and
- * - writes can honor core's entry edit lock, which plugin contexts can't read.
+ *   GET  /_emdash/api/document-revisions/me             caller's capabilities (admin UI)
+ *   GET  /_emdash/api/document-revisions/storage        usage and orphaned documents (Admin)
+ *   POST /_emdash/api/document-revisions/purge-orphans  delete files of deleted documents (Admin)
+ *   POST /_emdash/api/document-revisions/purge-all      delete every document file (Admin)
+ *
+ * The storage actions stand in for `plugin:uninstall`, which EmDash only
+ * runs for marketplace and registry plugins, never for native plugins
+ * registered in astro.config. No core scope rule covers this path, so API
+ * tokens need the `admin` scope here (core's middleware fails closed).
  */
 
 import type { APIRoute } from "astro";
 
-import {
-	canEdit,
-	canReadDrafts,
-	canReadPrivate,
-	getEntry,
-	hashPassword,
-	liveLock,
-	lockedByOther,
-	type Entry,
-	type User,
-} from "../access";
-import {
-	bucket,
-	COLLECTION,
-	ConcurrentUpdateError,
-	permalink,
-	readManifest,
-	revisionObjectKey,
-	Role,
-	updateManifest,
-	visibilityOf,
-	type Manifest,
-	type RevisionRecord,
-	type VisibilityMode,
-} from "../store";
+import { handle, HttpError, ok, readJson, requireUser } from "../http";
+import { bucket, COLLECTION, deleteAll, deleteEntry, listStoredEntryIds, Role, usage } from "../store";
+import { MAX_UPLOAD_BYTES } from "./files";
 
 export const prerender = false;
 
-/**
- * Cloudflare rejects request bodies over the plan's limit before the Worker
- * runs (about 100 MB on Free and Pro). Enforce the same ceiling here so the
- * error is ours and consistent across plans and local dev.
- */
-const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+/** Typed into the confirmation box; long enough that it can't be an accident. */
+export const PURGE_ALL_CONFIRMATION = "delete all document files";
 
-class HttpError extends Error {
-	constructor(
-		public status: number,
-		public code: string,
-		message: string,
-	) {
-		super(message);
-	}
-}
-
-const ok = (data: unknown, status = 200) => Response.json({ success: true, data }, { status });
-const fail = (e: HttpError) =>
-	Response.json({ success: false, error: { code: e.code, message: e.message } }, { status: e.status });
-
-function requireUser(locals: App.Locals): User {
-	if (!locals.user) throw new HttpError(401, "UNAUTHORIZED", "Authentication required");
-	return locals.user;
-}
-
-async function requireEntry(locals: App.Locals, entryId: unknown): Promise<Entry> {
-	if (typeof entryId !== "string" || !entryId) throw new HttpError(400, "BAD_REQUEST", "Missing entryId");
-	const entry = await getEntry(locals, entryId);
-	if (!entry) throw new HttpError(404, "NOT_FOUND", "Document not found");
-	return entry;
-}
-
-/** Edit permission plus core's lock rule: refuse only if someone else holds it. */
-async function requireWritable(locals: App.Locals, user: User, entry: Entry): Promise<void> {
-	if (!canEdit(user, entry)) {
-		throw new HttpError(403, "FORBIDDEN", "You can only change your own documents");
-	}
-	const lock = await lockedByOther(locals, entry.id, user.id);
-	if (lock) {
-		throw new HttpError(409, "ENTRY_LOCKED", `${lock.userName ?? "Another editor"} is editing this document`);
-	}
-}
-
-async function readJson(request: Request): Promise<Record<string, unknown>> {
-	const body = await request.json().catch(() => null);
-	if (!body || typeof body !== "object") throw new HttpError(400, "BAD_REQUEST", "Expected a JSON body");
-	return body as Record<string, unknown>;
-}
-
-const publicRevision = ({ key: _key, ...r }: RevisionRecord) => r;
-
-/** Revision log, visibility, lock state, and core content edits, newest first. */
-async function revisions(locals: App.Locals, url: URL) {
+function requireAdmin(locals: App.Locals) {
 	const user = requireUser(locals);
-	const entry = await requireEntry(locals, url.searchParams.get("entryId"));
-	const { manifest } = await readManifest(await bucket(), entry.id);
-	const visibility = visibilityOf(manifest);
-	if (!canReadDrafts(user) || (visibility.mode === "private" && !canReadPrivate(user, entry))) {
-		throw new HttpError(403, "FORBIDDEN", "Insufficient permissions");
+	if (user.role < Role.ADMIN) throw new HttpError(403, "FORBIDDEN", "Administrators only");
+	return user;
+}
+
+/** Documents with stored files whose entry no longer exists, trash included. */
+async function orphanIds(locals: App.Locals, ids: string[]): Promise<string[]> {
+	const get = locals.emdash?.handleContentGetIncludingTrashed;
+	if (typeof get !== "function") throw new HttpError(500, "NOT_CONFIGURED", "EmDash is not initialized");
+	const orphans: string[] = [];
+	for (const id of ids) {
+		const res = await get(COLLECTION, id);
+		if (!res.success) orphans.push(id);
 	}
+	return orphans;
+}
 
-	const files = manifest?.revisions ?? [];
-	const latest = files.at(-1);
-	const slug = entry.slug;
-
-	// Core keeps its own revisions of the entry's fields (title, summary,
-	// taxonomy). Show them in the same timeline so the log reads like WP
-	// Document Revisions' combined revision log.
-	const coreRes = await locals.emdash?.handleRevisionList(COLLECTION, entry.id, { limit: 50 });
-	const coreItems = ((coreRes?.success ? (coreRes.data as { items?: unknown[] })?.items : null) ??
-		[]) as Array<{ id: string; createdAt: string; authorId: string | null }>;
-	const authorNames = await namesFor(
-		locals,
-		coreItems.map((i) => i.authorId).filter((id): id is string => Boolean(id)),
-	);
-
+async function storage(locals: App.Locals) {
+	requireAdmin(locals);
+	const b = await bucket();
+	const ids = await listStoredEntryIds(b);
+	const orphans = await orphanIds(locals, ids);
 	return {
-		entryId: entry.id,
-		slug,
-		status: entry.status,
-		visibility: { mode: visibility.mode, hasPassword: Boolean(visibility.passwordHash) },
-		lock: await liveLock(locals, entry.id),
-		userId: user.id,
-		canEdit: canEdit(user, entry),
-		maxUploadBytes: MAX_UPLOAD_BYTES,
-		permalink: slug && latest ? permalink(slug, latest) : null,
-		revisions: [...files].reverse().map((r) => ({
-			...publicRevision(r),
-			url: slug ? permalink(slug, r, r.n) : null,
-		})),
-		edits: coreItems.map((i) => ({
-			id: i.id,
-			createdAt: toIso(i.createdAt),
-			authorName: i.authorId ? (authorNames.get(i.authorId) ?? null) : null,
-		})),
+		documents: ids.length,
+		orphans: orphans.length,
+		...(await usage(b, "entries/")),
+		purgeAllConfirmation: PURGE_ALL_CONFIRMATION,
 	};
 }
 
-/**
- * Core stores revision times as SQLite "YYYY-MM-DD HH:MM:SS" in UTC with no
- * zone marker; browsers would read that as local time and it wouldn't sort
- * against the ISO timestamps in the manifest.
- */
-function toIso(value: string): string {
-	return /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value) ? `${value.replace(" ", "T")}Z` : value;
-}
-
-async function namesFor(locals: App.Locals, ids: string[]): Promise<Map<string, string | null>> {
-	const db = locals.emdash?.db;
-	if (!db || ids.length === 0) return new Map();
-	const rows = await db
-		.selectFrom("users")
-		.select(["id", "name", "email"])
-		.where("id", "in", [...new Set(ids)])
-		.execute();
-	return new Map(rows.map((r) => [String(r.id), (r.name as string | null) ?? String(r.email)]));
-}
-
-/**
- * Stream one file into R2 as a new revision. The raw file is the body;
- * metadata rides in the query string.
- */
-async function upload(locals: App.Locals, request: Request, url: URL) {
-	const user = requireUser(locals);
-	const entry = await requireEntry(locals, url.searchParams.get("entryId"));
-	await requireWritable(locals, user, entry);
-
-	const filename = (url.searchParams.get("filename") ?? "").slice(0, 255);
-	if (!filename) throw new HttpError(400, "BAD_REQUEST", "Missing filename");
-	const note = url.searchParams.get("note")?.slice(0, 500) || null;
-
-	const lengthHeader = request.headers.get("content-length");
-	if (!lengthHeader) throw new HttpError(411, "LENGTH_REQUIRED", "Content-Length is required");
-	const size = Number(lengthHeader);
-	if (!Number.isSafeInteger(size) || size <= 0 || !request.body) {
-		throw new HttpError(400, "BAD_REQUEST", "Empty file");
-	}
-	if (size > MAX_UPLOAD_BYTES) {
-		throw new HttpError(413, "PAYLOAD_TOO_LARGE", `Files are limited to ${MAX_UPLOAD_BYTES / 1024 / 1024} MB`);
-	}
-	const contentType =
-		request.headers.get("content-type")?.split(";")[0]?.trim() || "application/octet-stream";
-
+async function purgeOrphans(locals: App.Locals) {
+	requireAdmin(locals);
 	const b = await bucket();
-	// Write the object before the manifest: an orphaned object is harmless,
-	// a manifest entry pointing at nothing is not.
-	const key = revisionObjectKey(entry.id);
-	await b.put(key, request.body.pipeThrough(new FixedLengthStream(size)), {
-		httpMetadata: { contentType },
-	});
-
-	const next = await updateManifest(b, entry.id, entry.slug, (m) => ({
-		...m,
-		slug: entry.slug,
-		revisions: [
-			...m.revisions,
-			{
-				n: (m.revisions.at(-1)?.n ?? 0) + 1,
-				key,
-				filename,
-				contentType,
-				size,
-				authorId: user.id,
-				authorName: user.name ?? user.email,
-				note,
-				createdAt: new Date().toISOString(),
-			},
-		],
-	}));
-	return { revision: publicRevision(next.revisions.at(-1)!) };
+	const orphans = await orphanIds(locals, await listStoredEntryIds(b));
+	let objects = 0;
+	for (const id of orphans) objects += await deleteEntry(b, id);
+	return { documents: orphans.length, objects };
 }
 
-/**
- * Make an earlier revision current again by appending it as a new revision,
- * as WP Document Revisions does. The new revision points at the same R2
- * object; files are only deleted with the whole document, so sharing is safe.
- */
-async function restore(locals: App.Locals, request: Request) {
-	const user = requireUser(locals);
+async function purgeAll(locals: App.Locals, request: Request) {
+	requireAdmin(locals);
 	const body = await readJson(request);
-	const entry = await requireEntry(locals, body.entryId);
-	await requireWritable(locals, user, entry);
-	const n = Number(body.n);
-	if (!Number.isInteger(n)) throw new HttpError(400, "BAD_REQUEST", "Missing revision number");
-
-	const b = await bucket();
-	const next = await updateManifest(b, entry.id, entry.slug, (m) => {
-		const source = m.revisions.find((r) => r.n === n);
-		if (!source) throw new HttpError(404, "NOT_FOUND", `Revision ${n} not found`);
-		return {
-			...m,
-			slug: entry.slug,
-			revisions: [
-				...m.revisions,
-				{
-					...source,
-					n: (m.revisions.at(-1)?.n ?? 0) + 1,
-					authorId: user.id,
-					authorName: user.name ?? user.email,
-					note: `Restored revision ${n}`,
-					createdAt: new Date().toISOString(),
-					restoredFrom: n,
-				},
-			],
-		};
-	});
-	return { revision: publicRevision(next.revisions.at(-1)!) };
-}
-
-const MODES: readonly VisibilityMode[] = ["public", "private", "password"];
-
-async function visibility(locals: App.Locals, request: Request) {
-	const user = requireUser(locals);
-	const body = await readJson(request);
-	const entry = await requireEntry(locals, body.entryId);
-	await requireWritable(locals, user, entry);
-	const mode = body.mode as VisibilityMode;
-	if (!MODES.includes(mode)) throw new HttpError(400, "BAD_REQUEST", "Unknown visibility");
-
-	const password = typeof body.password === "string" ? body.password : "";
-	if (password.length > 200) throw new HttpError(400, "BAD_REQUEST", "Password is too long");
-	const b = await bucket();
-	const { manifest } = await readManifest(b, entry.id);
-	const current = visibilityOf(manifest);
-	if (mode === "password" && !password && !current.passwordHash) {
-		throw new HttpError(400, "BAD_REQUEST", "A password is required");
+	if (body.confirm !== PURGE_ALL_CONFIRMATION) {
+		throw new HttpError(400, "CONFIRMATION_REQUIRED", `Type "${PURGE_ALL_CONFIRMATION}" to confirm`);
 	}
-	const hashed = mode === "password" && password ? await hashPassword(password) : null;
-
-	const next = await updateManifest(b, entry.id, entry.slug, (m: Manifest) => {
-		const prev = visibilityOf(m);
-		return {
-			...m,
-			slug: entry.slug,
-			visibility:
-				mode === "password"
-					? {
-							mode,
-							...(hashed ?? {
-								passwordHash: prev.passwordHash,
-								salt: prev.salt,
-								iterations: prev.iterations,
-							}),
-						}
-					: { mode },
-		};
-	});
-	const v = visibilityOf(next);
-	return { visibility: { mode: v.mode, hasPassword: Boolean(v.passwordHash) } };
+	return { objects: await deleteAll(await bucket()) };
 }
 
-/** Lets the admin UI decide whether to offer document creation at all. */
+/** Lets the admin UI decide what to offer. */
 function me(locals: App.Locals) {
 	const user = requireUser(locals);
 	return {
 		id: user.id,
 		role: user.role,
 		canCreate: user.role >= Role.AUTHOR,
+		isAdmin: user.role >= Role.ADMIN,
 		maxUploadBytes: MAX_UPLOAD_BYTES,
 	};
 }
 
-export const ALL: APIRoute = async ({ params, request, locals, url }) => {
-	const action = params.action ?? "";
-	const method = request.method;
-	try {
-		if (action === "revisions" && method === "GET") return ok(await revisions(locals, url));
+export const ALL: APIRoute = ({ params, request, locals }) =>
+	handle(async () => {
+		const action = params.action ?? "";
+		const method = request.method;
 		if (action === "me" && method === "GET") return ok(me(locals));
-		if (action === "upload" && method === "POST") return ok(await upload(locals, request, url), 201);
-		if (action === "restore" && method === "POST") return ok(await restore(locals, request), 201);
-		if (action === "visibility" && method === "POST") return ok(await visibility(locals, request));
+		if (action === "storage" && method === "GET") return ok(await storage(locals));
+		if (action === "purge-orphans" && method === "POST") return ok(await purgeOrphans(locals));
+		if (action === "purge-all" && method === "POST") return ok(await purgeAll(locals, request));
 		throw new HttpError(404, "NOT_FOUND", "Unknown document action");
-	} catch (e) {
-		if (e instanceof HttpError) return fail(e);
-		if (e instanceof ConcurrentUpdateError) return fail(new HttpError(409, "CONFLICT", e.message));
-		console.error("[document-revisions]", e);
-		return fail(new HttpError(500, "INTERNAL_ERROR", "Document request failed"));
-	}
-};
+	});

@@ -14,6 +14,7 @@ import * as React from "react";
 import type { RevisionRecord, VisibilityMode } from "./store";
 
 const API = "/_emdash/api/document-revisions";
+const filesApi = (entryId: string) => `/_emdash/api/content/documents/${encodeURIComponent(entryId)}/files`;
 
 type Revision = Omit<RevisionRecord, "key"> & { url: string | null };
 
@@ -40,17 +41,17 @@ function formatSize(bytes: number): string {
 const message = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
 
 function uploadFile(entryId: string, file: File, note: string) {
-	const qs = new URLSearchParams({ entryId, filename: file.name });
+	const qs = new URLSearchParams({ filename: file.name });
 	if (note.trim()) qs.set("note", note.trim());
-	return apiFetch(`${API}/upload?${qs}`, {
+	return apiFetch(`${filesApi(entryId)}?${qs}`, {
 		method: "POST",
 		headers: { "Content-Type": file.type || "application/octet-stream" },
 		body: file,
 	});
 }
 
-function postJson(path: string, body: unknown) {
-	return apiFetch(`${API}/${path}`, {
+function postJson(url: string, body: unknown) {
+	return apiFetch(url, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(body),
@@ -131,7 +132,7 @@ function DocumentRevisionsPanel({ entry }: ContentEditorPanelContext) {
 
 	const load = React.useCallback(async () => {
 		try {
-			const res = await apiFetch(`${API}/revisions?entryId=${encodeURIComponent(entryId)}`);
+			const res = await apiFetch(filesApi(entryId));
 			setData(await parseApiResponse<RevisionsResponse>(res, "Could not load revisions"));
 		} catch (cause) {
 			setError(message(cause));
@@ -222,7 +223,7 @@ function DocumentRevisionsPanel({ entry }: ContentEditorPanelContext) {
 					data={data}
 					disabled={busy || !canWrite}
 					onSave={(mode, password) =>
-						void run(() => postJson("visibility", { entryId, mode, password }), "Could not save visibility")
+						void run(() => postJson(`${filesApi(entryId)}/visibility`, { mode, password }), "Could not save visibility")
 					}
 				/>
 			) : null}
@@ -266,7 +267,7 @@ function DocumentRevisionsPanel({ entry }: ContentEditorPanelContext) {
 										disabled={busy}
 										onClick={() =>
 											void run(
-												() => postJson("restore", { entryId, n: item.revision.n }),
+												() => postJson(`${filesApi(entryId)}/restore`, { n: item.revision.n }),
 												"Could not restore",
 											)
 										}
@@ -412,6 +413,123 @@ function NewDocumentPage() {
 	);
 }
 
+// --- Document storage page ---------------------------------------------
+
+interface StorageStats {
+	documents: number;
+	orphans: number;
+	objects: number;
+	bytes: number;
+	purgeAllConfirmation: string;
+}
+
+/**
+ * EmDash never runs `plugin:uninstall` for native plugins, so this page is
+ * how an administrator cleans up: delete files left behind by documents
+ * deleted while the plugin was off, or delete everything before removing it.
+ */
+function StoragePage() {
+	const [stats, setStats] = React.useState<StorageStats>();
+	const [error, setError] = React.useState<string>();
+	const [notice, setNotice] = React.useState<string>();
+	const [busy, setBusy] = React.useState(false);
+	const [confirm, setConfirm] = React.useState("");
+
+	const load = React.useCallback(async () => {
+		try {
+			setStats(await parseApiResponse<StorageStats>(await apiFetch(`${API}/storage`), "Could not load storage"));
+		} catch (cause) {
+			setError(message(cause));
+		}
+	}, []);
+
+	React.useEffect(() => {
+		void load();
+	}, [load]);
+
+	async function purge(action: "purge-orphans" | "purge-all", body: unknown) {
+		setBusy(true);
+		setError(undefined);
+		setNotice(undefined);
+		try {
+			const res = await parseApiResponse<{ objects: number }>(
+				await postJson(`${API}/${action}`, body),
+				"Could not delete files",
+			);
+			setNotice(`Deleted ${res.objects} stored objects.`);
+			setConfirm("");
+			await load();
+		} catch (cause) {
+			setError(message(cause));
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	return (
+		<section className="max-w-xl space-y-4">
+			<h1 className="text-2xl font-semibold">Document storage</h1>
+			{stats ? (
+				<p>
+					{stats.documents} documents with files, {stats.objects} stored objects ({formatSize(stats.bytes)}).
+				</p>
+			) : null}
+			{error ? (
+				<p role="alert" className="text-kumo-danger">
+					{error}
+				</p>
+			) : null}
+			{notice ? <p>{notice}</p> : null}
+
+			{stats ? (
+				<div className="space-y-2">
+					<h2 className="text-lg font-semibold">Orphaned files</h2>
+					<p className="text-kumo-subtle">
+						Files whose document no longer exists, for example because it was deleted while this plugin was
+						turned off.
+					</p>
+					<button
+						type="button"
+						className="rounded border px-3 py-1"
+						disabled={busy || stats.orphans === 0}
+						onClick={() => void purge("purge-orphans", {})}
+					>
+						{stats.orphans === 0 ? "No orphaned files" : `Delete files of ${stats.orphans} deleted documents`}
+					</button>
+				</div>
+			) : null}
+
+			{stats ? (
+				<div className="space-y-2">
+					<h2 className="text-lg font-semibold">Delete all document files</h2>
+					<p className="text-kumo-subtle">
+						Removes every stored file and revision log, for example before removing this plugin. Documents stay
+						in EmDash but lose their files. This can't be undone. Type{" "}
+						<strong>{stats.purgeAllConfirmation}</strong> to confirm.
+					</p>
+					<input
+						type="text"
+						className="w-full rounded border px-2 py-1"
+						aria-label="Confirmation"
+						value={confirm}
+						disabled={busy}
+						onChange={(e) => setConfirm(e.currentTarget.value)}
+					/>
+					<button
+						type="button"
+						className="rounded border px-3 py-1 text-kumo-danger"
+						disabled={busy || confirm !== stats.purgeAllConfirmation}
+						onClick={() => void purge("purge-all", { confirm })}
+					>
+						Delete all document files
+					</button>
+				</div>
+			) : null}
+		</section>
+	);
+}
+
 export const pages: PluginAdminExports["pages"] = {
 	"/new": NewDocumentPage,
+	"/storage": StoragePage,
 };
