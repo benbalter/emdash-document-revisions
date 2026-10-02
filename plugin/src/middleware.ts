@@ -14,9 +14,21 @@ import { bucket, COLLECTION, readManifest, readSettings, visibilityOf } from "./
 
 const SEARCH_PATHS = new Set(["/_emdash/api/search", "/_emdash/api/search/suggest"]);
 
+/** The password cookie the preview block reads (see access.ts passwordCookieName). */
+const hasPasswordCookie = (request: Request) => /(?:^|;\s*)edr_pw_/.test(request.headers.get("cookie") ?? "");
+
 export const onRequest = defineMiddleware(async (context, next) => {
 	const response = await next();
 	const path = context.url.pathname.replace(/\/+$/, "");
+	// Document blocks render for the viewer: a signed-in user's page can list
+	// their private documents or show revision logs, and a password cookie
+	// changes the preview block. Astro's route cache (e.g. Workers Cache)
+	// ignores Cache-Control and would serve such a page to anonymous visitors,
+	// and EmDash only opts out for editors with its toolbar. Opt out here,
+	// after the page has rendered, so a later cache.set(hint) can't re-enable it.
+	if (!path.startsWith("/_emdash") && (context.locals.user || hasPasswordCookie(context.request))) {
+		context.cache?.set(false);
+	}
 	if (!SEARCH_PATHS.has(path) || !response.ok) return response;
 	const body = (await response.clone().json().catch(() => null)) as
 		| { success?: boolean; data?: { items?: Array<Record<string, unknown>> } }

@@ -62,7 +62,13 @@ describe("Upload and permalinks", () => {
 		});
 
 		it("public latest is cacheable", async () => {
-			expect(cacheControl(await anon().get(`/documents/${P}.pdf`))).toBe("public, max-age=60");
+			expect(cacheControl(await anon().get(`/documents/${P}.pdf`))).toBe("public, no-cache");
+		});
+
+		it("a private file is never stored by shared caches", async () => {
+			const slug = uniq("verify-private-cc");
+			await makeDocument(slug, { visibility: "private" });
+			expect(cacheControl(await as("admin").get(`/documents/${slug}.txt`))).toBe("private, no-store");
 		});
 
 		it("published, signed-in subscriber", async () => {
