@@ -301,6 +301,7 @@ export const contentEditorPanels = [
 
 function NewDocumentPage() {
 	const [canCreate, setCanCreate] = React.useState<boolean>();
+	const [maxUploadBytes, setMaxUploadBytes] = React.useState<number>();
 	const [title, setTitle] = React.useState("");
 	const [note, setNote] = React.useState("");
 	const [file, setFile] = React.useState<File | null>(null);
@@ -310,8 +311,11 @@ function NewDocumentPage() {
 	React.useEffect(() => {
 		void (async () => {
 			try {
-				const me = await parseApiResponse<{ canCreate: boolean }>(await apiFetch(`${API}/me`));
+				const me = await parseApiResponse<{ canCreate: boolean; maxUploadBytes: number }>(
+					await apiFetch(`${API}/me`),
+				);
 				setCanCreate(me.canCreate);
+				setMaxUploadBytes(me.maxUploadBytes);
 			} catch (cause) {
 				setError(message(cause));
 			}
@@ -321,6 +325,12 @@ function NewDocumentPage() {
 	async function submit(e: React.SyntheticEvent) {
 		e.preventDefault();
 		if (!file) return;
+		// Check before creating the entry, so an oversized file doesn't leave an
+		// empty document behind.
+		if (maxUploadBytes && file.size > maxUploadBytes) {
+			setError(`Files are limited to ${formatSize(maxUploadBytes)}.`);
+			return;
+		}
 		setBusy(true);
 		setError(undefined);
 		let entryId: string | null = null;

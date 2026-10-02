@@ -171,8 +171,16 @@ export async function lockedByOther(
 
 // --- Password protection -------------------------------------------------
 
-/** Below workerd's PBKDF2 iteration ceiling (100k). */
-const PBKDF2_ITERATIONS = 60_000;
+/**
+ * Sized for Cloudflare's Free plan, where a request gets about 10 ms of CPU
+ * and WebCrypto work counts toward it. These are shared access codes for a
+ * document, not account passwords (WordPress stores post passwords in
+ * plaintext), so this trades hash strength for headroom. The count is
+ * stored with each hash, so it can be raised without breaking old ones.
+ */
+const PBKDF2_ITERATIONS = 20_000;
+/** What hashes written before the count was stored used. */
+const LEGACY_PBKDF2_ITERATIONS = 60_000;
 const COOKIE_MAX_AGE = 10 * 24 * 60 * 60; // WordPress's post-password cookie lifetime.
 
 const enc = new TextEncoder();
@@ -191,21 +199,27 @@ function fromB64url(s: string): Uint8Array<ArrayBuffer> {
 	return out;
 }
 
-async function pbkdf2(password: string, salt: BufferSource): Promise<string> {
+async function pbkdf2(password: string, salt: BufferSource, iterations: number): Promise<string> {
 	const key = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, [
 		"deriveBits",
 	]);
 	const bits = await crypto.subtle.deriveBits(
-		{ name: "PBKDF2", hash: "SHA-256", salt, iterations: PBKDF2_ITERATIONS },
+		{ name: "PBKDF2", hash: "SHA-256", salt, iterations },
 		key,
 		256,
 	);
 	return b64url(bits);
 }
 
-export async function hashPassword(password: string): Promise<{ passwordHash: string; salt: string }> {
+export async function hashPassword(
+	password: string,
+): Promise<{ passwordHash: string; salt: string; iterations: number }> {
 	const salt = crypto.getRandomValues(new Uint8Array(16));
-	return { passwordHash: await pbkdf2(password, salt), salt: b64url(salt) };
+	return {
+		passwordHash: await pbkdf2(password, salt, PBKDF2_ITERATIONS),
+		salt: b64url(salt),
+		iterations: PBKDF2_ITERATIONS,
+	};
 }
 
 function timingSafeEqual(a: string, b: string): boolean {
@@ -218,7 +232,8 @@ function timingSafeEqual(a: string, b: string): boolean {
 export async function verifyPassword(manifest: Manifest, password: string): Promise<boolean> {
 	const v = visibilityOf(manifest);
 	if (v.mode !== "password" || !v.passwordHash || !v.salt) return false;
-	return timingSafeEqual(await pbkdf2(password, fromB64url(v.salt)), v.passwordHash);
+	const iterations = v.iterations ?? LEGACY_PBKDF2_ITERATIONS;
+	return timingSafeEqual(await pbkdf2(password, fromB64url(v.salt), iterations), v.passwordHash);
 }
 
 async function cookieSecret(): Promise<string> {

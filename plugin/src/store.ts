@@ -44,6 +44,8 @@ export interface Visibility {
 	/** PBKDF2 hash and salt, base64url. Only set in password mode. */
 	passwordHash?: string;
 	salt?: string;
+	/** PBKDF2 iterations used for this hash; absent on hashes from before it was stored. */
+	iterations?: number;
 }
 
 export interface Manifest {

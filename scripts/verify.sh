@@ -23,7 +23,12 @@ TMP=$(mktemp -d)
 RUN=$(date +%s)
 DEV=dev@emdash.local
 OTHER=verify-other
-trap 'role 50 >/dev/null; rm -rf "$TMP"' EXIT
+cleanup() {
+	role 50 >/dev/null
+	sql "update _emdash_collections set edit_locking=1 where slug='documents'; delete from _emdash_entry_locks where token='verify';"
+	rm -rf "$TMP"
+}
+trap cleanup EXIT
 
 pass=0
 fail=0
@@ -105,6 +110,9 @@ check "unknown revision" 404 "$(code -b "$TMP/jar" "$B/documents/$P-revision-99.
 check "bad path shape" 404 "$(code "$B/documents/a/b")"
 check "revision log hides storage keys" 0 \
 	"$(as "$API/revisions?entryId=$P_ID" | grep -c '"key"')"
+as -H 'Content-Type: application/json' -X PUT "$CONTENT/$P_ID" -d '{"data":{"title":"Verify renamed"}}' >/dev/null
+check "revision log includes core field edits, ISO-dated" yes \
+	"$(as "$API/revisions?entryId=$P_ID" | python3 -c 'import json,sys; e=json.load(sys.stdin)["data"]["edits"]; print("yes" if e and all(x["createdAt"].endswith("Z") for x in e) else "no")')"
 
 echo "Dotted slugs"
 DOT=verify.$RUN
@@ -232,6 +240,20 @@ role 20; check "contributor can't create documents" False \
 role 30; check "author can create documents" True \
 	"$(as "$API/me" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["canCreate"])')"
 role 50
+
+echo "API tokens (core's fail-closed scope rules)"
+mktoken() {
+	as -H 'Content-Type: application/json' -X POST "$B/_emdash/api/admin/api-tokens" \
+		-d "$(printf '{"name":"verify-%s","scopes":["%s"]}' "$1" "$1")" |
+		python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["token"])'
+}
+read_token=$(mktoken content:read)
+admin_token=$(mktoken admin)
+check "content:read token can't read" 403 \
+	"$(code -H "Authorization: Bearer $read_token" "$API/revisions?entryId=$P_ID")"
+check "content:read token can't write" 403 \
+	"$(code -H "Authorization: Bearer $read_token" -H 'Content-Type: application/json' -X POST "$API/restore" -d "$(restore_body "$P_ID" 1)")"
+check "admin token can" 200 "$(code -H "Authorization: Bearer $admin_token" "$API/revisions?entryId=$P_ID")"
 
 echo
 echo "$pass passed, $fail failed"

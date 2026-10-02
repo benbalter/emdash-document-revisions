@@ -134,10 +134,19 @@ async function revisions(locals: App.Locals, url: URL) {
 		})),
 		edits: coreItems.map((i) => ({
 			id: i.id,
-			createdAt: i.createdAt,
+			createdAt: toIso(i.createdAt),
 			authorName: i.authorId ? (authorNames.get(i.authorId) ?? null) : null,
 		})),
 	};
+}
+
+/**
+ * Core stores revision times as SQLite "YYYY-MM-DD HH:MM:SS" in UTC with no
+ * zone marker; browsers would read that as local time and it wouldn't sort
+ * against the ISO timestamps in the manifest.
+ */
+function toIso(value: string): string {
+	return /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value) ? `${value.replace(" ", "T")}Z` : value;
 }
 
 async function namesFor(locals: App.Locals, ids: string[]): Promise<Map<string, string | null>> {
@@ -269,7 +278,14 @@ async function visibility(locals: App.Locals, request: Request) {
 			slug: entry.slug,
 			visibility:
 				mode === "password"
-					? { mode, ...(hashed ?? { passwordHash: prev.passwordHash, salt: prev.salt }) }
+					? {
+							mode,
+							...(hashed ?? {
+								passwordHash: prev.passwordHash,
+								salt: prev.salt,
+								iterations: prev.iterations,
+							}),
+						}
 					: { mode },
 		};
 	});
@@ -280,7 +296,12 @@ async function visibility(locals: App.Locals, request: Request) {
 /** Lets the admin UI decide whether to offer document creation at all. */
 function me(locals: App.Locals) {
 	const user = requireUser(locals);
-	return { id: user.id, role: user.role, canCreate: user.role >= Role.AUTHOR };
+	return {
+		id: user.id,
+		role: user.role,
+		canCreate: user.role >= Role.AUTHOR,
+		maxUploadBytes: MAX_UPLOAD_BYTES,
+	};
 }
 
 export const ALL: APIRoute = async ({ params, request, locals, url }) => {
