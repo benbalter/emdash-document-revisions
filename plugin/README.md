@@ -12,6 +12,10 @@ A TypeScript port of [WP Document Revisions](https://github.com/wp-document-revi
 
 Requires an EmDash 1.1 site on Cloudflare Workers with R2.
 
+```sh
+pnpm add emdash-document-revisions
+```
+
 1. Register both halves in `astro.config.mjs`. A native EmDash plugin can't inject site routes, so the permalink and API routes come from a separate Astro integration:
    ```js
    import { documentRevisions, documentRevisionsRoutes } from "emdash-document-revisions";
