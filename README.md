@@ -18,7 +18,7 @@ A port of [WP Document Revisions](https://github.com/wp-document-revisions/wp-do
 - [`site/`](site/) — the EmDash Cloudflare starter, wired to the plugin. It adds:
   - a `documents` collection and a `workflow_state` taxonomy, in [`seed/seed.json`](site/seed/seed.json);
   - a `DOCUMENTS` R2 binding, in [`wrangler.jsonc`](site/wrangler.jsonc).
-- [`scripts/verify.sh`](scripts/verify.sh) — end-to-end checks (73) against a local dev server.
+- [`scripts/verify.sh`](scripts/verify.sh) — end-to-end checks (77) against a local dev server.
 
 ## Run it
 
@@ -54,7 +54,7 @@ To add a document, either use **Upload document** in the admin sidebar, or creat
 | Restore a revision | Appends the old file as a new revision ("Restored revision N"), as WordPress does |
 | `/documents/2011/08/tps-report.pdf`, `tps-report-revision-3.pdf` | Same URL shapes. The extensionless and date-prefixed forms also resolve, and a wrong extension still resolves. |
 | Files hashed and stored outside the web root | Random object keys in a separate, private R2 bucket |
-| Private / password-protected / public | Set per document in the panel. Private: Editors, Admins and the document's author. Password: PBKDF2-hashed, 10-day HttpOnly cookie, invalidated when the password changes. |
+| Private / password-protected / public | Set per document in the panel. Private: Editors, Admins and the document's author. Password: PBKDF2-hashed, 10-day HttpOnly cookie, invalidated when the password changes. **Only the file is gated:** the title and summary of a published private document still show in EmDash's public search and listings ([ROADMAP](ROADMAP.md#gaps-found-while-building-core-parity)). |
 | Drafts and past revisions | Contributor and up (core's `content:read_drafts`), and never more open than the current file. Everything else 404s, so slugs don't leak. |
 | Authors edit only their own | Author: own documents; Editor and up: any (core's `edit_own` / `edit_any`) |
 | Check-out lock | Core's entry edit lock, which the editor already acquires, renews and lets users take over. Uploads, restores and visibility changes are refused (409) while someone else holds it, which is the same rule core applies to saves. |
@@ -73,15 +73,17 @@ To add a document, either use **Upload document** in the admin sidebar, or creat
 
    So the plugin injects ordinary Astro routes instead. The permalink is a site route, where EmDash's soft-auth middleware sets `locals.user`. The API lives under `/_emdash/api/`, where core's middleware authenticates every request and requires the CSRF header on writes.
 3. **Anonymous requests get no content handlers.** On EmDash's anonymous fast path, `locals.emdash` has no database or handlers. Anonymous permalinks therefore resolve through `getEmDashEntry()`, which only returns published entries; that's all an anonymous visitor may see anyway.
-4. **The lock check reads core's table directly.** Core exposes no lock handler outside its own routes, so [`access.ts`](plugin/src/access.ts) queries `_emdash_entry_locks` the same way `EntryLockRepository.findEnforceable` does. If core changes that table, this check needs updating.
-5. **Permissions are fixed.** Roles are fixed (Subscriber through Admin) and plugins can't define permissions. WordPress capabilities like `read_private_documents` become rules in [`access.ts`](plugin/src/access.ts).
-6. **Editor panels only mount on saved entries.** That's why there's a separate **Upload document** page.
-7. **Native plugin code doesn't hot-reload** under `astro dev`. Restart with `npx astro dev stop && npx astro dev`.
-8. **Cloudflare only.** The R2 binding comes from `cloudflare:workers`. A Node deployment would need an S3 adapter.
+4. **API tokens need the `admin` scope.** Core's middleware fails closed: an `/_emdash/api` path with no scope rule, like this plugin's, requires `admin`. A `content:read` or `content:write` token gets a 403, even for reads.
+5. **The lock check reads core's table directly.** Core exposes no lock handler outside its own routes, so [`access.ts`](plugin/src/access.ts) queries `_emdash_entry_locks` the same way `EntryLockRepository.findEnforceable` does. If core changes that table, this check needs updating.
+6. **Permissions are fixed.** Roles are fixed (Subscriber through Admin) and plugins can't define permissions. WordPress capabilities like `read_private_documents` become rules in [`access.ts`](plugin/src/access.ts).
+7. **Editor panels only mount on saved entries.** That's why there's a separate **Upload document** page.
+8. **Native plugin code doesn't hot-reload** under `astro dev`. Restart with `npx astro dev stop && npx astro dev`.
+9. **Cloudflare only.** The R2 binding comes from `cloudflare:workers`. A Node deployment would need an S3 adapter.
+10. **Password hashing is sized for the Free plan.** WebCrypto counts toward the Worker's CPU budget (about 10 ms on Free), so passwords use 20k PBKDF2 iterations (about 1.4 ms on an M-series Mac). These are shared access codes, not account passwords; WordPress stores post passwords in plaintext. The count is stored with each hash, so it can be raised later.
 
 ## Verification
 
-[`scripts/verify.sh`](scripts/verify.sh) runs 73 checks against `pnpm dev`, using miniflare D1 and R2, on EmDash 1.1.0. They cover:
+[`scripts/verify.sh`](scripts/verify.sh) runs 77 checks against `pnpm dev`, using miniflare D1 and R2, on EmDash 1.1.0. They cover:
 
 - permalink shapes;
 - draft, private and password access for each role;
@@ -92,7 +94,9 @@ To add a document, either use **Upload document** in the admin sidebar, or creat
 - ownership;
 - trash, restore and permanent-delete cleanup;
 - recycled slugs;
-- CSRF.
+- CSRF;
+- API-token scopes;
+- core field edits in the log.
 
 In Chrome I also tested, by hand:
 - the Upload document page;
