@@ -59,12 +59,18 @@ describe("Search filters documents per viewer", () => {
 	});
 
 	it("a trailing slash doesn't bypass the filter", async () => {
-		expect(await found(anon(), "/_emdash/api/search/")).toEqual({
-			pub: true,
-			privOwn: false,
-			privOther: false,
-			pw: false,
-		});
+		// EmDash 1.1 doesn't treat /search/ as its public route (401 for
+		// visitors); the middleware filters it anyway in case that changes.
+		for (const c of [anon(), as("subscriber")]) {
+			const res = await c.get(`/_emdash/api/search/?q=${word}`);
+			if (!res.ok) {
+				expect([401, 403, 404]).toContain(res.status);
+				continue;
+			}
+			const { data } = (await res.json()) as { data: { items: SearchItem[] } };
+			const docIds = data.items.map((i) => i.id);
+			for (const id of [ids.privOwn, ids.privOther, ids.pw]) expect(docIds).not.toContain(id);
+		}
 	});
 
 	it("suggestions are filtered the same way", async () => {

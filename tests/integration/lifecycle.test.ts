@@ -34,8 +34,10 @@ describe("Trash, restore, permanent delete", () => {
 	});
 
 	it("trashed files kept", () => {
-		// Two files and the manifest.
-		expect(r2count(`entries/${id}/`)).toBe(3);
+		// Both files and the manifest. (Not a count of entries/<id>/ as a
+		// whole: extracted text lands there too, whenever the queue gets to it.)
+		expect(r2count(`entries/${id}/files/`)).toBe(2);
+		expect(r2count(`entries/${id}/manifest.json`)).toBe(1);
 	});
 
 	it("trashed log stays readable", async () => {

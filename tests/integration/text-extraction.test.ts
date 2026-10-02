@@ -46,7 +46,10 @@ describe("Text extraction (queue)", () => {
 	});
 
 	it("PDF skipped without a Workers AI binding", () => {
-		expect(log.revisions.find((r) => r.n === 2)!.text?.status).toBe("skipped");
+		expect(log.revisions.find((r) => r.n === 2)!.text).toMatchObject({
+			status: "skipped",
+			error: "needs a Workers AI binding",
+		});
 	});
 
 	it("skipped revision has no text", async () => {

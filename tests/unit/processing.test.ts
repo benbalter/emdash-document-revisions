@@ -106,9 +106,18 @@ describe("processJob", () => {
 	it("skips files no processor accepts", async () => {
 		const j = job({ filename: "a.bin", contentType: "application/octet-stream" });
 		await seed(new Uint8Array([1, 2, 3]), j);
-		expect(await processJob(j, {})).toMatchObject({ status: "skipped" });
+		const info = await processJob(j, {});
+		expect(info).toMatchObject({ status: "skipped" });
+		expect(info.error).toBeUndefined();
 		expect((await textOf(1))?.status).toBe("skipped");
 		expect(await bucket().head(textKey("e1", j.key))).toBeNull();
+	});
+
+	it("says when a file only needs the Workers AI binding", async () => {
+		const j = job({ filename: "report.pdf", contentType: "application/pdf" });
+		await seed("%PDF-1.4", j);
+		expect(await processJob(j, {})).toMatchObject({ status: "skipped", error: "needs a Workers AI binding" });
+		expect(await textOf(1)).toMatchObject({ status: "skipped", error: "needs a Workers AI binding" });
 	});
 
 	it("skips files no longer in the revision log, without writing", async () => {
@@ -143,7 +152,7 @@ describe("processJob", () => {
 		const j = job({ filename: "big.pdf", contentType: "application/pdf" });
 		await seed(new Uint8Array(25 * MB + 1), j);
 		const { env, toMarkdown } = aiEnv();
-		expect(await processJob(j, env)).toMatchObject({ status: "skipped", error: "Too large to extract (25 MB)" });
+		expect(await processJob(j, env)).toMatchObject({ status: "skipped", error: "too large to extract (25 MB)" });
 		expect(toMarkdown).not.toHaveBeenCalled();
 	});
 

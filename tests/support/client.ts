@@ -30,7 +30,7 @@ export interface RevisionView {
 	note: string | null;
 	createdAt: string;
 	restoredFrom?: number | null;
-	text?: { status: string; truncated?: boolean; chars?: number };
+	text?: { status: string; truncated?: boolean; chars?: number; error?: string };
 	url: string | null;
 }
 
