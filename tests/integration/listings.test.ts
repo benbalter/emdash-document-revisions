@@ -106,7 +106,8 @@ describe("Private titles stay out of public listings", () => {
 	});
 
 	it("listing page hides a password-protected document", async () => {
-		await admin.setVisibility(pubId, "password", "lp");
+		const res = await admin.setVisibility(pubId, "password", "lp");
+		expect(res.status, await res.clone().text()).toBe(200);
 		try {
 			expect(await listed(PUB)).toBe(0);
 		} finally {
