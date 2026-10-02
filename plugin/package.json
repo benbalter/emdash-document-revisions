@@ -2,6 +2,26 @@
   "name": "emdash-document-revisions",
   "version": "0.2.0",
   "description": "Document management for EmDash: versioned files stored privately in R2 and served through permission-checked permalinks.",
+  "keywords": [
+    "emdash",
+    "emdash-plugin",
+    "cloudflare-workers",
+    "r2",
+    "document-management",
+    "revisions",
+    "wp-document-revisions"
+  ],
+  "homepage": "https://github.com/benbalter/emdash-document-revisions#readme",
+  "bugs": {
+    "url": "https://github.com/benbalter/emdash-document-revisions/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/benbalter/emdash-document-revisions.git",
+    "directory": "plugin"
+  },
+  "license": "MIT",
+  "author": "Ben Balter",
   "type": "module",
   "main": "src/index.ts",
   "exports": {
@@ -19,7 +39,9 @@
     "src",
     "seed"
   ],
-  "license": "MIT",
+  "engines": {
+    "node": ">=22.16"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit"
   },

@@ -36,7 +36,7 @@ These are drafts of issues for [emdash-cms/emdash](https://github.com/emdash-cms
 - a documented `emdash plugin uninstall <id>` CLI command that runs the hook; or
 - a note in the docs that native plugins must provide their own cleanup.
 
-**Workaround today.** A **Document storage** admin page with "delete orphaned files" and "delete everything".
+**Workaround today.** The **Document settings** admin page, with "delete orphaned files" and "delete all document files".
 
 ---
 
