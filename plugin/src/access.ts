@@ -109,8 +109,14 @@ export function fileAccess(
 	let current: Access;
 	if (entry.status !== "published") {
 		current = canReadDrafts(user) ? "allow" : "deny";
-		// A draft keeps its visibility setting; a private draft stays private.
+		// A draft keeps its visibility setting: a private draft stays private,
+		// and a password-protected one still needs edit rights or the password.
+		// Drafts deny rather than prompt, because the password form only
+		// accepts published documents.
 		if (current === "allow" && visibility === "private" && !canReadPrivate(user, entry)) {
+			current = "deny";
+		}
+		if (current === "allow" && visibility === "password" && !canEdit(user, entry) && !opts.passwordCookieValid) {
 			current = "deny";
 		}
 	} else if (visibility === "private") {

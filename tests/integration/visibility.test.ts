@@ -181,12 +181,7 @@ describe("Password-protected documents", () => {
 	});
 });
 
-/**
- * Known divergence (see tests/unit/access.test.ts): a password-protected
- * draft opens for any Contributor without the password, though the README
- * says drafts are never more open than their visibility. Reported, not fixed;
- * `it.fails` flips to a failure once the rule changes.
- */
+/** A draft keeps its visibility: password-protected drafts need edit rights. */
 describe("Password-protected drafts", () => {
 	const SLUG = uniq("verify-pw-draft");
 	let id: string;
@@ -199,11 +194,11 @@ describe("Password-protected drafts", () => {
 		expect((await as("editor").get(`/documents/${SLUG}`)).status).toBe(200);
 	});
 
-	it.fails("contributor (not author) needs the password for a password-protected draft", async () => {
-		expect((await as("contributor").get(`/documents/${SLUG}`)).status).not.toBe(200);
+	it("contributor (not author) can't open a password-protected draft", async () => {
+		expect((await as("contributor").get(`/documents/${SLUG}`)).status).toBe(404);
 	});
 
-	it.fails("contributor (not author) can't read a password-protected draft's log", async () => {
+	it("contributor (not author) can't read a password-protected draft's log", async () => {
 		expect((await as("contributor").get(`${CONTENT}/${id}/files`)).status).toBe(403);
 	});
 });

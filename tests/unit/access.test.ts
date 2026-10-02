@@ -84,7 +84,8 @@ function expected(
 
 	let current: Access;
 	if (status === "draft") {
-		current = readsDrafts && (mode !== "private" || readsPrivate) ? "allow" : "deny";
+		const visible = mode === "private" ? readsPrivate : mode === "password" ? editsIt || cookie : true;
+		current = readsDrafts && visible ? "allow" : "deny";
 	} else if (mode === "public") {
 		current = "allow";
 	} else if (mode === "private") {
@@ -109,15 +110,8 @@ for (const role of ROLES)
 						cases.push([name, role, own, mode, status, revision, cookie]);
 					}
 
-/** Password-protected drafts: see the "known divergence" block below. */
-const passwordDraftDivergence = (c: Case) => {
-	const [, role, own, mode, status, , cookie] = c;
-	const editsIt = (role ?? 0) >= 40 || ((role ?? 0) >= 30 && own);
-	return mode === "password" && status === "draft" && (role ?? 0) >= 20 && !editsIt && !cookie;
-};
-
 describe("fileAccess matches the README's permission table", () => {
-	it.each(cases.filter((c) => !passwordDraftDivergence(c)))(
+	it.each(cases)(
 		"%s",
 		(_name, role, own, mode, status, revision, cookie) => {
 			const got = fileAccess(viewer(role, own), entry({ status }), manifest(mode), {
@@ -143,24 +137,6 @@ describe("fileAccess matches the README's permission table", () => {
 				fileAccess(user("c", 20), entry({ status }), manifest(), { revision: false, passwordCookieValid: false }),
 			).toBe("allow");
 		}
-	});
-});
-
-/**
- * Known divergence, reported rather than fixed: for a password-protected
- * *draft*, fileAccess only checks content:read_drafts, so any Contributor or
- * Author who can't edit the document opens it (and, via canSeeFiles, its
- * revision log and extracted text) without the password. The README says
- * draft access is "never more than the document's own visibility allows".
- * `it.fails` keeps this visible: it starts failing once the rule changes.
- */
-describe("known divergence: password-protected drafts", () => {
-	it.fails.each(cases.filter(passwordDraftDivergence))("%s still needs the password", (_n, role, own, mode, status, revision, cookie) => {
-		const got = fileAccess(viewer(role, own), entry({ status }), manifest(mode), {
-			revision,
-			passwordCookieValid: cookie,
-		});
-		expect(got).not.toBe("allow");
 	});
 });
 
