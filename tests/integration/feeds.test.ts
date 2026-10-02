@@ -99,6 +99,15 @@ describe("Revision feed", () => {
 			expect((await feed(PUB, mkey)).status).toBe(404);
 		});
 
+		it("including through the public feed-data route the feed calls in-process", async () => {
+			const res = await anon().get(
+				`/_emdash/api/plugins/document-revisions/feed-data?doc=${PUB}&key=${encodeURIComponent(mkey)}`,
+			);
+			const body = (await res.json()) as { data?: { ok?: boolean; revisions?: unknown } };
+			expect(body.data?.ok).toBe(false);
+			expect(body.data?.revisions).toBeUndefined();
+		});
+
 		it("and works again once the account is re-enabled", async () => {
 			db().run("update users set disabled = 0 where id = ?", userId("mutable"));
 			expect((await feed(PRIV, mkey)).status).toBe(200);
