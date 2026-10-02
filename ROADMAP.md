@@ -4,7 +4,7 @@ This lists what's left between this port and [WP Document Revisions](https://git
 
 ## Gaps found while building core parity
 
-Addressed so far: private titles kept out of public search and listings, uninstall cleanup (the **Document storage** page), the lock check failing closed, and `content:*` API tokens. See the README's [platform constraints](README.md#platform-constraints). The upstream changes that would remove the workarounds are drafted in [docs/upstream-requests.md](docs/upstream-requests.md).
+Done: the WordPress importer ([README](README.md#import-from-wordpress)). Addressed so far: private titles kept out of public search and listings, uninstall cleanup (the **Document storage** page), the lock check failing closed, and `content:*` API tokens. See the README's [platform constraints](README.md#platform-constraints). The upstream changes that would remove the workarounds are drafted in [docs/upstream-requests.md](docs/upstream-requests.md).
 
 | Gap | Why | Proposed fix | Est. |
 |---|---|---|---|
@@ -38,7 +38,6 @@ Addressed so far: private titles kept out of public search and listings, uninsta
 
 | Gap | Proposed approach | Est. |
 |---|---|---|
-| **Import from WordPress** | EmDash's WXR importer puts attachments in the public media bucket. Instead, add an importer that reads WPDR's attachment history per document, streams each file into `DOCUMENTS`, and builds manifests with the original revision order, authors and dates. Keep the WP permalinks working; the date-prefixed form already resolves. This is what lets existing users actually switch. | 3–4h |
 | Unit tests and CI | Unit tests for `store.ts` / `access.ts` with EmDash's plugin test runtime. Run [`scripts/verify.sh`](scripts/verify.sh) in CI against `astro dev`. | 2–3h |
 | i18n | Admin strings through Lingui, EmDash's admin i18n, rather than GlotPress | 1–2h |
 | Publish to npm | Build step (tsdown), `peerDependencies`, install docs (the README covers the manual steps) | 1h |

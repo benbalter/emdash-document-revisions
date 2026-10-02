@@ -44,9 +44,13 @@ export function requireUser(locals: App.Locals): User {
 	return locals.user;
 }
 
-export async function requireEntry(locals: App.Locals, entryId: unknown): Promise<Entry> {
+export async function requireEntry(
+	locals: App.Locals,
+	entryId: unknown,
+	opts: { includeTrashed?: boolean } = {},
+): Promise<Entry> {
 	if (typeof entryId !== "string" || !entryId) throw new HttpError(400, "BAD_REQUEST", "Missing document ID");
-	const entry = await getEntry(locals, entryId);
+	const entry = await getEntry(locals, entryId, opts);
 	if (!entry) throw new HttpError(404, "NOT_FOUND", "Document not found");
 	return entry;
 }

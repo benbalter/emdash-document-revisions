@@ -54,6 +54,8 @@ export interface Manifest {
 	revisions: RevisionRecord[];
 	/** Absent on manifests written before visibility existed: public. */
 	visibility?: Visibility;
+	/** Where an imported document came from, so re-running an import can skip it. */
+	source?: { system: "wordpress"; id: number; site: string };
 }
 
 /**

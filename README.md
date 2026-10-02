@@ -21,7 +21,8 @@ A port of [WP Document Revisions](https://github.com/wp-document-revisions/wp-do
   - a `documents` collection and a `workflow_state` taxonomy, in [`seed/seed.json`](site/seed/seed.json);
   - a `DOCUMENTS` R2 binding, in [`wrangler.jsonc`](site/wrangler.jsonc);
   - an example public listing at [`src/pages/documents/index.astro`](site/src/pages/documents/index.astro).
-- [`scripts/verify.sh`](scripts/verify.sh) — end-to-end checks (92) against a local dev server.
+- [`scripts/wpdr-export.php`](scripts/wpdr-export.php) and [`scripts/import-wpdr.mjs`](scripts/import-wpdr.mjs) — migrate from WP Document Revisions; see [Import from WordPress](#import-from-wordpress).
+- [`scripts/verify.sh`](scripts/verify.sh) — end-to-end checks (92) against a local dev server. [`scripts/verify-import.sh`](scripts/verify-import.sh) checks the importer (36) against a real WordPress in [Playground](https://wordpress.org/playground/).
 
 ## Run it
 
@@ -49,6 +50,36 @@ To add a document, either use **Upload document** in the admin sidebar, or creat
 4. Set `EMDASH_ENCRYPTION_KEY`. EmDash already requires it, and it also signs the cookies for password-protected documents.
 5. If your site lists documents, filter the list through `filterPublicDocuments()` (see the [example page](site/src/pages/documents/index.astro)).
 
+## Import from WordPress
+
+The importer moves documents with their full history: every revision keeps its WP Document Revisions number, author, date and note. Old links like `/documents/2011/08/tps-report-revision-3.pdf` keep working.
+
+1. **Export on the WordPress server**, where the document files are readable:
+   ```sh
+   wp eval-file wpdr-export.php ./wpdr-bundle
+   ```
+   This writes `wpdr-bundle/export.json` and `wpdr-bundle/files/`. Add `--include-trash` to bring trashed documents too. If any document file is missing on disk, the export stops and lists them; `--allow-missing` exports without those revisions. Tested with WP Document Revisions 5.7, including a document upload directory outside the web root.
+
+   > **The bundle is sensitive.** `export.json` holds WordPress's plaintext post passwords and users' emails, and `files/` holds every private document. Keep it off shared storage, never commit it, and delete it once the import is done. WordPress's own export (WXR) can't do this: it leaves out post revisions, which are the revision log, and its attachment URLs point at files the plugin keeps private.
+2. **Create an API token** in EmDash (**Settings → API tokens**) with the `admin` scope, as an Administrator. Imports set authors and dates, and look users up by email.
+3. **Import:**
+   ```sh
+   EMDASH_TOKEN=ec_pat_… node scripts/import-wpdr.mjs ./wpdr-bundle --site https://your-site.example --dry-run
+   EMDASH_TOKEN=ec_pat_… node scripts/import-wpdr.mjs ./wpdr-bundle --site https://your-site.example
+   ```
+
+What carries over:
+
+| WordPress | EmDash |
+|---|---|
+| Title, slug, description, created and published dates | Entry title, slug, summary, `createdAt` / `publishedAt` |
+| Document author | Entry owner, when an EmDash user has the same email; otherwise you are the owner and the WordPress name stays on the revisions |
+| Every revision: number, author, date, excerpt (the log note) | One revision each, numbered the same. Revisions that only changed the title or note share the previous file, which is stored once. |
+| Published / private / password-protected / draft / scheduled / trashed | Published / published + private / published + password (the plaintext WordPress password is hashed on import) / draft / scheduled / trashed |
+| Workflow states | `workflow_state` terms, created if missing |
+
+Documents with a file over the upload limit (100 MB) are reported and skipped before anything is created. Re-running is safe: documents already imported (matched by WordPress ID) are skipped. A slug already used by another EmDash document is reported and left alone. File names become `slug.ext`, as WP Document Revisions serves them, because WordPress renamed uploads to an MD5 and the original names are gone.
+
 ## Parity with WP Document Revisions
 
 | WP Document Revisions | Here |
@@ -64,6 +95,7 @@ To add a document, either use **Upload document** in the admin sidebar, or creat
 | Check-out lock | Core's entry edit lock, which the editor already acquires, renews and lets users take over. Uploads, restores and visibility changes are refused (409) while someone else holds it, which is the same rule core applies to saves. |
 | Upload limit | Streamed to R2; 100 MB per file, about Cloudflare's request-body limit on Free and Pro |
 | Workflow states | A taxonomy |
+| Migration | [Import from WordPress](#import-from-wordpress): full revision history, original numbering, authors, dates, notes, visibility and workflow states |
 | Trash / delete / uninstall | Trashed documents 404 but keep their files. Permanent delete removes the files, manifest and slug index. The **Document storage** page (Admins) shows usage, deletes files whose documents are gone, and can delete everything before you remove the plugin. |
 | Slug change | A hook re-indexes the slug, and core adds a 301 from the old URL |
 

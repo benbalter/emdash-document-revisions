@@ -28,11 +28,18 @@ export interface Entry {
  * fast path `locals.emdash` carries no database or handlers at all. Callers
  * that serve anonymous visitors use getPublishedEntry() instead.
  */
-export async function getEntry(locals: Locals, entryId: string): Promise<Entry | null> {
+export async function getEntry(
+	locals: Locals,
+	entryId: string,
+	opts: { includeTrashed?: boolean } = {},
+): Promise<Entry | null> {
 	if (typeof locals.emdash?.handleContentGet !== "function") return null;
-	const res = await locals.emdash.handleContentGet(COLLECTION, entryId);
-	if (!res?.success || !res.data?.item) return null;
-	const item = res.data.item as Record<string, unknown>;
+	const res = opts.includeTrashed
+		? await locals.emdash.handleContentGetIncludingTrashed(COLLECTION, entryId)
+		: await locals.emdash.handleContentGet(COLLECTION, entryId);
+	// The including-trashed handler is typed loosely; both return { item }.
+	const item = res?.success ? (res.data as { item?: Record<string, unknown> } | undefined)?.item : undefined;
+	if (!item) return null;
 	return {
 		id: String(item.id),
 		slug: (item.slug as string | null) ?? null,

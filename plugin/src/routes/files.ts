@@ -20,6 +20,7 @@
 import type { APIRoute } from "astro";
 
 import { canEdit, canReadDrafts, canReadPrivate, hashPassword, liveLock } from "../access";
+import type { User } from "../access";
 import { handle, HttpError, ok, readJson, requireEntry, requireUser, requireWritable } from "../http";
 import {
 	bucket,
@@ -32,6 +33,7 @@ import {
 	type Manifest,
 	type RevisionRecord,
 	type VisibilityMode,
+	Role,
 } from "../store";
 
 export const prerender = false;
@@ -68,7 +70,9 @@ async function namesFor(locals: App.Locals, ids: string[]): Promise<Map<string, 
 /** Revision log, visibility, lock state, and core content edits, newest first. */
 async function revisions(locals: App.Locals, entryId: string) {
 	const user = requireUser(locals);
-	const entry = await requireEntry(locals, entryId);
+	// Trashed documents keep their log readable (for editors and importers);
+	// every write still refuses them.
+	const entry = await requireEntry(locals, entryId, { includeTrashed: true });
 	const { manifest } = await readManifest(await bucket(), entry.id);
 	const visibility = visibilityOf(manifest);
 	if (!canReadDrafts(user) || (visibility.mode === "private" && !canReadPrivate(user, entry))) {
@@ -100,6 +104,7 @@ async function revisions(locals: App.Locals, entryId: string) {
 		visibility: { mode: visibility.mode, hasPassword: Boolean(visibility.passwordHash) },
 		lock,
 		userId: user.id,
+		source: manifest?.source ?? null,
 		canEdit: canEdit(user, entry),
 		maxUploadBytes: MAX_UPLOAD_BYTES,
 		permalink: slug && latest ? permalink(slug, latest) : null,
@@ -202,6 +207,115 @@ async function restore(locals: App.Locals, request: Request, entryId: string) {
 	return { revision: publicRevision(next.revisions.at(-1)!) };
 }
 
+/**
+ * Import one revision with its original number, author, date, and note.
+ * Administrators only: unlike an upload, it lets the caller assert who made
+ * the revision and when.
+ *
+ * Query: n, filename, note, createdAt, authorName, authorEmail, and either
+ * a raw file body or `reuse=<n>` to share an already-imported revision's
+ * file (WordPress revisions that only changed the title or note). The
+ * first call can also record `sourceId` / `sourceSite` on the manifest.
+ */
+async function importRevision(locals: App.Locals, request: Request, url: URL, entryId: string) {
+	const user = requireUser(locals);
+	if (user.role < Role.ADMIN) throw new HttpError(403, "FORBIDDEN", "Importing is limited to administrators");
+	const entry = await requireEntry(locals, entryId);
+	await requireWritable(locals, user, entry);
+
+	const q = url.searchParams;
+	const n = Number(q.get("n"));
+	if (!Number.isInteger(n) || n < 1) throw new HttpError(400, "BAD_REQUEST", "Missing revision number");
+	const filename = (q.get("filename") ?? "").slice(0, 255);
+	if (!filename) throw new HttpError(400, "BAD_REQUEST", "Missing filename");
+	const createdAt = q.get("createdAt") && !Number.isNaN(Date.parse(q.get("createdAt")!))
+		? new Date(q.get("createdAt")!).toISOString()
+		: new Date().toISOString();
+	const authorEmail = q.get("authorEmail");
+	const mapped = authorEmail ? await userByEmail(locals, authorEmail) : null;
+	const reuse = q.get("reuse") ? Number(q.get("reuse")) : null;
+
+	const b = await bucket();
+	let key: string;
+	let size: number;
+	let contentType: string;
+	if (reuse !== null) {
+		const { manifest } = await readManifest(b, entry.id);
+		const source = manifest?.revisions.find((r) => r.n === reuse);
+		if (!source) throw new HttpError(404, "NOT_FOUND", `Revision ${reuse} to reuse not found`);
+		({ key, size, contentType } = source);
+	} else {
+		size = Number(request.headers.get("content-length"));
+		if (!Number.isSafeInteger(size) || size <= 0 || !request.body) {
+			throw new HttpError(411, "LENGTH_REQUIRED", "A file body with Content-Length is required");
+		}
+		if (size > MAX_UPLOAD_BYTES) {
+			throw new HttpError(413, "PAYLOAD_TOO_LARGE", `Files are limited to ${MAX_UPLOAD_BYTES / 1024 / 1024} MB`);
+		}
+		contentType = request.headers.get("content-type")?.split(";")[0]?.trim() || "application/octet-stream";
+		key = revisionObjectKey(entry.id);
+		await b.put(key, request.body.pipeThrough(new FixedLengthStream(size)), { httpMetadata: { contentType } });
+	}
+
+	const sourceId = Number(q.get("sourceId"));
+	const next = await updateManifest(b, entry.id, entry.slug, (m) => {
+		// Keep the log in order; a re-run of the same revision is a conflict, not a duplicate.
+		if (m.revisions.some((r) => r.n >= n)) {
+			throw new HttpError(409, "CONFLICT", `Revision ${n} is not newer than the existing revisions`);
+		}
+		return {
+			...m,
+			slug: entry.slug,
+			...(Number.isInteger(sourceId) && sourceId > 0
+				? { source: { system: "wordpress" as const, id: sourceId, site: q.get("sourceSite") ?? "" } }
+				: {}),
+			revisions: [
+				...m.revisions,
+				{
+					n,
+					key,
+					filename,
+					contentType,
+					size,
+					authorId: mapped?.id ?? `wordpress:${authorEmail ?? "unknown"}`,
+					authorName: q.get("authorName") || mapped?.name || null,
+					note: q.get("note")?.slice(0, 500) || null,
+					createdAt,
+				},
+			],
+		};
+	});
+	return { revision: publicRevision(next.revisions.at(-1)!) };
+}
+
+/** Record where a document came from when it has no files to import. Admins only. */
+async function recordSource(locals: App.Locals, request: Request, entryId: string) {
+	const user = requireUser(locals);
+	if (user.role < Role.ADMIN) throw new HttpError(403, "FORBIDDEN", "Importing is limited to administrators");
+	const entry = await requireEntry(locals, entryId);
+	const body = await readJson(request);
+	const id = Number(body.id);
+	if (!Number.isInteger(id) || id < 1) throw new HttpError(400, "BAD_REQUEST", "Missing source id");
+	const site = typeof body.site === "string" ? body.site.slice(0, 500) : "";
+	const next = await updateManifest(await bucket(), entry.id, entry.slug, (m) => ({
+		...m,
+		slug: entry.slug,
+		source: { system: "wordpress", id, site },
+	}));
+	return { source: next.source };
+}
+
+async function userByEmail(locals: App.Locals, email: string): Promise<Pick<User, "id" | "name"> | null> {
+	const db = locals.emdash?.db;
+	if (!db) return null;
+	const row = await db
+		.selectFrom("users")
+		.select(["id", "name"])
+		.where("email", "=", email.toLowerCase())
+		.executeTakeFirst();
+	return row ? { id: String(row.id), name: (row.name as string | null) ?? null } : null;
+}
+
 const MODES: readonly VisibilityMode[] = ["public", "private", "password"];
 
 async function visibility(locals: App.Locals, request: Request, entryId: string) {
@@ -252,5 +366,9 @@ export const ALL: APIRoute = ({ params, request, locals, url }) =>
 		if (action === "" && method === "POST") return ok(await upload(locals, request, url, entryId), 201);
 		if (action === "restore" && method === "POST") return ok(await restore(locals, request, entryId), 201);
 		if (action === "visibility" && method === "POST") return ok(await visibility(locals, request, entryId));
+		if (action === "source" && method === "POST") return ok(await recordSource(locals, request, entryId));
+		if (action === "import" && method === "POST") {
+			return ok(await importRevision(locals, request, url, entryId), 201);
+		}
 		throw new HttpError(404, "NOT_FOUND", "Unknown document action");
 	});
