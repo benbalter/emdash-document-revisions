@@ -62,7 +62,9 @@ curl -s -c "$WORK/jar" -o /dev/null "$B/_emdash/api/setup/dev-bypass?redirect=/"
 TOKEN=$(curl -s -b "$WORK/jar" -H 'X-EmDash-Request: 1' -H 'Content-Type: application/json' -X POST \
 	"$B/_emdash/api/admin/api-tokens" -d "{\"name\":\"verify-import-$RUN\",\"scopes\":[\"admin\"]}" |
 	python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["token"])')
-EMDASH_TOKEN=$TOKEN node "$ROOT/scripts/import-wpdr.mjs" "$BUNDLE" --site "$B" >"$WORK/import1.log"
+# --multipart-over 100: every file over 100 bytes (the fixture PDF included)
+# goes through the multipart path, which the byte-identical PDF check covers.
+EMDASH_TOKEN=$TOKEN node "$ROOT/scripts/import-wpdr.mjs" "$BUNDLE" --site "$B" --multipart-over 100 >"$WORK/import1.log"
 check "first import" 0 $?
 check "first import imported all 7" 1 "$(grep -c '^7 imported$' "$WORK/import1.log")"
 EMDASH_TOKEN=$TOKEN node "$ROOT/scripts/import-wpdr.mjs" "$BUNDLE" --site "$B" >"$WORK/import2.log"
@@ -120,14 +122,14 @@ check "trashed document is in the trash" 1 \
 check "trashed document's file isn't served" 404 "$(code -b "$WORK/jar" "$B/documents/memo-$RUN.txt")"
 
 echo "Oversized files"
-# Fake a 200 MB revision in a copy of the bundle: the importer must refuse the
+# Fake a 6 GB revision in a copy of the bundle: the importer must refuse the
 # document before creating anything, not fail halfway through its revisions.
 python3 - "$BUNDLE/export.json" "$WORK/big.json" <<'PY'
 import json, sys
 e = json.load(open(sys.argv[1]))
 doc = next(d for d in e["documents"] if d["slug"].startswith("minutes-"))
 doc["slug"] = doc["slug"] + "-big"
-doc["revisions"][0]["file"]["size"] = 200 * 1024 * 1024
+doc["revisions"][0]["file"]["size"] = 6 * 1024 ** 3  # over the 5 GB multipart cap
 e["documents"] = [doc]
 json.dump(e, open(sys.argv[2], "w"))
 PY

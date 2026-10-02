@@ -25,6 +25,8 @@ DEV=dev@emdash.local
 OTHER=verify-other
 cleanup() {
 	role 50 >/dev/null
+	# Back to the product default (private, as in WP Document Revisions).
+	curl -s -o /dev/null -b "$TMP/jar" -H "$H" -H 'Content-Type: application/json' -X POST "$API/settings" -d '{"defaultVisibility":"private"}' 
 	sql "alter table _emdash_entry_locks_verify rename to _emdash_entry_locks;" 2>/dev/null
 	sql "update _emdash_collections set edit_locking=1 where slug='documents'; delete from _emdash_entry_locks where token='verify';"
 	rm -rf "$TMP"
@@ -80,6 +82,9 @@ setvis() { post "$CONTENT/$1/files/visibility" "$(printf '{"mode":"%s","password
 
 role 50
 dev_id=$(sql "select id from users where email='$DEV'")
+# Most checks below assume documents are public once published; the default
+# itself is tested in its own section.
+curl -s -o /dev/null -b "$TMP/jar" -H "$H" -H 'Content-Type: application/json' -X POST "$API/settings" -d '{"defaultVisibility":"public"}' 
 sql "insert or ignore into users (id, email, name, role) values ('$OTHER', 'other@verify.local', 'Other Editor', 40);"
 
 printf 'one\n' >"$TMP/one.txt"
@@ -274,6 +279,143 @@ check "upload when the lock table is unreadable" 503 "$(upload "$P_ID" "$TMP/one
 check "log still readable" 200 "$(code -b "$TMP/jar" "$CONTENT/$P_ID/files")"
 sql "alter table _emdash_entry_locks_verify rename to _emdash_entry_locks;"
 check "upload once the table is back" 201 "$(upload "$P_ID" "$TMP/one.txt" text/plain one.txt)"
+
+echo "Default visibility for new documents"
+post "$API/settings" '{"defaultVisibility":"private"}' >/dev/null
+DV_ID=$(create "verify-dv-$RUN" "Default private $RUN")
+check "new document is private when the default is private" private \
+	"$(as "$CONTENT/$DV_ID/files" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["visibility"]["mode"])')"
+role 40
+check "settings are Admin-only" 403 "$(code -b "$TMP/jar" "$API/settings")"
+role 50
+post "$API/settings" '{"defaultVisibility":"public"}' >/dev/null
+DV2_ID=$(create "verify-dv2-$RUN" "Default public $RUN")
+check "new document is public when the default is public" public \
+	"$(as "$CONTENT/$DV2_ID/files" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["visibility"]["mode"])')"
+
+echo "Range and conditional requests"
+R_SL=verify-range-$RUN
+R_ID=$(create "$R_SL" "Range $RUN")
+seq 1 2000 >"$TMP/range.txt"
+upload "$R_ID" "$TMP/range.txt" text/plain range.txt >/dev/null
+publish "$R_ID"
+check "first 10 bytes" "$(head -c 10 "$TMP/range.txt" | od -An -c | tr -d ' \n')" \
+	"$(curl -s -H 'Range: bytes=0-9' "$B/documents/$R_SL.txt" | od -An -c | tr -d ' \n')"
+check "206 with Content-Range" "206 bytes 0-9/$(wc -c <"$TMP/range.txt" | tr -d ' ')" \
+	"$(curl -s -D - -o /dev/null -H 'Range: bytes=0-9' "$B/documents/$R_SL.txt" | tr -d '\r' | awk -F': ' '/^HTTP/{s=$0; sub(/^HTTP\/[0-9.]+ /,"",s); split(s,a," "); c=a[1]} tolower($1)=="content-range"{r=$2} END{print c" "r}')"
+check "suffix range" "$(tail -c 6 "$TMP/range.txt" | od -An -c | tr -d ' \n')" \
+	"$(curl -s -H 'Range: bytes=-6' "$B/documents/$R_SL.txt" | od -An -c | tr -d ' \n')"
+check "unsatisfiable range" 416 "$(code -H 'Range: bytes=99999999-' "$B/documents/$R_SL.txt")"
+etag=$(curl -s -D - -o /dev/null "$B/documents/$R_SL.txt" | tr -d '\r' | awk -F': ' 'tolower($1)=="etag"{print $2}')
+check "If-None-Match gets 304" 304 "$(code -H "If-None-Match: $etag" "$B/documents/$R_SL.txt")"
+check "Accept-Ranges advertised" bytes \
+	"$(curl -s -D - -o /dev/null "$B/documents/$R_SL.txt" | tr -d '\r' | awk -F': ' 'tolower($1)=="accept-ranges"{print $2}')"
+setvis "$R_ID" private >/dev/null
+check "Range doesn't bypass privacy" 404 "$(code -H 'Range: bytes=0-9' "$B/documents/$R_SL.txt")"
+
+echo "Multipart uploads (past the 100 MB single-request cap)"
+MP_ID=$(create "verify-mp-$RUN" "Multipart $RUN")
+head -c $((150 * 1024 * 1024)) /dev/urandom >"$TMP/mp.bin"
+mp_create() { curl -s -b "$TMP/jar" -H "$H" -H 'Content-Type: application/json' -X POST "$CONTENT/$1/files/uploads" -d '{"contentType":"application/octet-stream"}'; }
+MP=$(mp_create "$MP_ID")
+MP_UP=$(echo "$MP" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["uploadId"])')
+MP_KEY=$(echo "$MP" | python3 -c 'import json,sys,urllib.parse; print(urllib.parse.quote(json.load(sys.stdin)["data"]["key"], safe=""))')
+MP_RAWKEY=$(echo "$MP" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["key"])')
+split -b $((50 * 1024 * 1024)) "$TMP/mp.bin" "$TMP/mp_part_"
+parts="["
+n=1
+for f in "$TMP"/mp_part_*; do
+	parts+=$(curl -s -b "$TMP/jar" -H "$H" -X PUT --data-binary "@$f" "$CONTENT/$MP_ID/files/uploads/$MP_UP/parts/$n?key=$MP_KEY" |
+		python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["data"]))'),
+	n=$((n + 1))
+done
+parts="${parts%,}]"
+check "three parts accepted" 3 "$(echo "$parts" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+check "complete" 201 "$(post "$CONTENT/$MP_ID/files/uploads/$MP_UP/complete" "$(printf '{"key":"%s","parts":%s,"filename":"big.bin","note":"multipart"}' "$MP_RAWKEY" "$parts")")"
+check "150 MiB round-trips byte-identical" same \
+	"$(curl -s -b "$TMP/jar" "$B/documents/verify-mp-$RUN" | cmp -s - "$TMP/mp.bin" && echo same || echo different)"
+rm -f "$TMP/mp.bin" "$TMP"/mp_part_*
+MP2=$(mp_create "$MP_ID")
+MP2_UP=$(echo "$MP2" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["uploadId"])')
+MP2_KEY=$(echo "$MP2" | python3 -c 'import json,sys,urllib.parse; print(urllib.parse.quote(json.load(sys.stdin)["data"]["key"], safe=""))')
+curl -s -o /dev/null -b "$TMP/jar" -H "$H" -X PUT --data-binary "@$TMP/one.txt" "$CONTENT/$MP_ID/files/uploads/$MP2_UP/parts/1?key=$MP2_KEY"
+check "abort" 200 "$(code -b "$TMP/jar" -H "$H" -X DELETE "$CONTENT/$MP_ID/files/uploads/$MP2_UP?key=$MP2_KEY")"
+check "aborted upload adds no revision" 1 \
+	"$(as "$CONTENT/$MP_ID/files" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["data"]["revisions"]))')"
+check "a part can't target another document's key" 400 \
+	"$(code -b "$TMP/jar" -H "$H" -X PUT --data-binary "@$TMP/one.txt" "$CONTENT/$MP_ID/files/uploads/x/parts/1?key=entries%2F$P_ID%2Ffiles%2Fx")"
+sql "insert into _emdash_entry_locks (collection, entry_id, user_id, token, acquired_at, expires_at) values ('documents', '$MP_ID', '$OTHER', 'verify', '$acquired', '$expires');"
+check "multipart refused while someone else holds the lock" 409 "$(code -b "$TMP/jar" -H "$H" -H 'Content-Type: application/json' -X POST "$CONTENT/$MP_ID/files/uploads" -d '{}')"
+sql "delete from _emdash_entry_locks where entry_id='$MP_ID';"
+sql "update ec_documents set author_id='$OTHER' where id='$O_ID';"
+role 30
+check "author can't start a multipart upload on another's document" 403 \
+	"$(code -b "$TMP/jar" -H "$H" -H 'Content-Type: application/json' -X POST "$CONTENT/$O_ID/files/uploads" -d '{}')"
+role 50
+
+echo "Password rate limit"
+RL_SL=verify-rl-$RUN
+RL_ID=$(create "$RL_SL" "Rate limit $RUN")
+upload "$RL_ID" "$TMP/one.txt" text/plain one.txt >/dev/null
+publish "$RL_ID"
+setvis "$RL_ID" password rl-secret >/dev/null
+codes=""
+for _ in 1 2 3 4 5 6; do codes+="$(code -X POST --data-urlencode password=wrong "$B/documents/$RL_SL") "; done
+check "sixth wrong password in a minute is throttled" "401 401 401 401 401 429" "${codes% }"
+
+echo "Text extraction (queue)"
+TX_ID=$(create "verify-tx-$RUN" "Text $RUN")
+printf 'The quick brown fox\n' >"$TMP/fox.txt"
+upload "$TX_ID" "$TMP/fox.txt" text/plain fox.txt >/dev/null
+upload "$TX_ID" "$TMP/two.pdf" application/pdf two.pdf >/dev/null
+text_status() { as "$CONTENT/$TX_ID/files" | python3 -c "import json,sys; r={x['n']:x for x in json.load(sys.stdin)['data']['revisions']}; print((r[$1].get('text') or {}).get('status','pending'))"; }
+for _ in $(seq 1 20); do [[ $(text_status 1) != pending && $(text_status 2) != pending ]] && break; sleep 0.5; done
+check "plain text extracted" done "$(text_status 1)"
+check "extracted text matches" "The quick brown fox" \
+	"$(as "$CONTENT/$TX_ID/files/text?n=1" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["text"].strip())')"
+check "PDF skipped without a Workers AI binding" skipped "$(text_status 2)"
+role 10
+check "extracted text needs read-drafts" 403 "$(code -b "$TMP/jar" "$CONTENT/$TX_ID/files/text?n=1")"
+role 50
+as -X DELETE "$CONTENT/$TX_ID" >/dev/null
+as -X DELETE "$CONTENT/$TX_ID/permanent" >/dev/null
+check "permanent delete removes extracted text" 0 "$(r2count "entries/$TX_ID/text/")"
+
+echo "List columns"
+COLS=$(as "$API/columns?ids=$P_ID,$O_ID")
+check "columns report file type and size" yes \
+	"$(python3 -c 'import json,sys; d=json.loads(sys.argv[1])["data"]; r=d[sys.argv[2]]; print("yes" if r["type"] and r["size"]>0 and r["visibility"] else "no")' "$COLS" "$P_ID")"
+role 10
+check "columns need read-drafts" 403 "$(code -b "$TMP/jar" "$API/columns?ids=$P_ID")"
+role 50
+
+echo "Revision feed"
+FEED_KEY=$(as -X POST "$API/feed-key" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["key"])')
+check "feed without a key" 404 "$(code "$B/documents/$P/feed")"
+check "feed with a wrong key" 404 "$(code "$B/documents/$P/feed?key=wrongwrongwrongwrongwrong")"
+check "feed with the key" 200 "$(code "$B/documents/$P/feed?key=$FEED_KEY")"
+check "feed is Atom with one entry per revision" yes "$(curl -s "$B/documents/$P/feed?key=$FEED_KEY" | python3 -c '
+import sys, xml.etree.ElementTree as ET
+ns={"a":"http://www.w3.org/2005/Atom"}
+root=ET.fromstring(sys.stdin.read())
+entries=root.findall("a:entry",ns)
+print("yes" if len(entries)>=4 and all("-revision-" in e.find("a:link",ns).get("href") for e in entries) else "no")')"
+OLD_KEY=$FEED_KEY
+FEED_KEY=$(as -X POST "$API/feed-key" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["key"])')
+check "a new key revokes the old one" 404 "$(code "$B/documents/$P/feed?key=$OLD_KEY")"
+role 10
+SUB_KEY_STATUS=$(code -b "$TMP/jar" -H "$H" -X POST "$API/feed-key")
+check "subscribers can't get feed keys" 403 "$SUB_KEY_STATUS"
+# One dev account, so one key: the feed checks the user's role on every
+# request, which also shows role changes take effect immediately.
+sql "update ec_documents set author_id='$OTHER' where id='$O_ID';"
+setvis "$O_ID" private >/dev/null
+role 20
+check "contributor's key can't read another's private document feed" 404 "$(code "$B/documents/$O/feed?key=$FEED_KEY")"
+role 50
+check "same key works once the user is promoted" 200 "$(code "$B/documents/$O/feed?key=$FEED_KEY")"
+as -X DELETE "$API/feed-key" >/dev/null
+check "revoked key stops working" 404 "$(code "$B/documents/$O/feed?key=$FEED_KEY")"
 
 echo "API tokens (scopes map like core content routes)"
 mktoken() {

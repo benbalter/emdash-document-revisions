@@ -11,6 +11,8 @@
  * it and only plugin handlers can reach `ctx.storage`.
  */
 
+import type { TextInfo } from "./processing";
+
 export const COLLECTION = "documents";
 export const BINDING = "DOCUMENTS";
 
@@ -35,6 +37,8 @@ export interface RevisionRecord {
 	createdAt: string;
 	/** Set when this revision re-instates an earlier one's file. */
 	restoredFrom?: number | null;
+	/** Extraction state for this revision's file (shared by revisions with the same key). */
+	text?: TextInfo;
 }
 
 export type VisibilityMode = "public" | "private" | "password";
@@ -74,8 +78,74 @@ const entryPrefix = (entryId: string) => `entries/${entryId}/`;
 const manifestKey = (entryId: string) => `${entryPrefix(entryId)}manifest.json`;
 const slugKey = (slug: string) => `slugs/${slug}`;
 
-export function emptyManifest(entryId: string, slug: string | null): Manifest {
-	return { entryId, slug, revisions: [], visibility: { mode: "public" } };
+export function emptyManifest(
+	entryId: string,
+	slug: string | null,
+	mode: VisibilityMode = "public",
+): Manifest {
+	return { entryId, slug, revisions: [], visibility: { mode } };
+}
+
+// --- Site settings ------------------------------------------------------
+//
+// Kept in the bucket (not plugin settings) because the site routes that
+// read them can't reach the plugin context.
+
+export interface DocumentSettings {
+	/** Visibility for newly created documents. WP Document Revisions defaults to private. */
+	defaultVisibility: Exclude<VisibilityMode, "password">;
+}
+
+export const DEFAULT_SETTINGS: DocumentSettings = { defaultVisibility: "private" };
+
+export async function readSettings(b: R2Bucket): Promise<DocumentSettings> {
+	const obj = await b.get("settings.json");
+	if (!obj) return DEFAULT_SETTINGS;
+	return { ...DEFAULT_SETTINGS, ...((await obj.json()) as Partial<DocumentSettings>) };
+}
+
+export async function writeSettings(b: R2Bucket, next: DocumentSettings): Promise<DocumentSettings> {
+	await b.put("settings.json", JSON.stringify(next), { httpMetadata: { contentType: "application/json" } });
+	return next;
+}
+
+// --- Revision feed keys -------------------------------------------------
+//
+// Feed readers can't send session cookies, so each user gets a secret key
+// for their revision feeds (WP Document Revisions' per-user feed key). Only
+// a SHA-256 of the key is stored.
+
+export async function sha256Hex(value: string): Promise<string> {
+	const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+	return [...new Uint8Array(digest)].map((x) => x.toString(16).padStart(2, "0")).join("");
+}
+
+export async function feedKeyUser(b: R2Bucket, key: string): Promise<string | null> {
+	if (!/^[A-Za-z0-9_-]{20,100}$/.test(key)) return null;
+	const obj = await b.get(`feedkeys/${await sha256Hex(key)}`);
+	return obj ? ((await obj.json()) as { userId: string }).userId : null;
+}
+
+export async function hasFeedKey(b: R2Bucket, userId: string): Promise<boolean> {
+	return (await b.head(`feedusers/${userId}`)) !== null;
+}
+
+/** Issue a new key for a user, revoking any previous one. Returns the key once. */
+export async function issueFeedKey(b: R2Bucket, userId: string): Promise<string> {
+	await revokeFeedKey(b, userId);
+	const bytes = crypto.getRandomValues(new Uint8Array(24));
+	const key = btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+	const hash = await sha256Hex(key);
+	await b.put(`feedkeys/${hash}`, JSON.stringify({ userId }));
+	await b.put(`feedusers/${userId}`, JSON.stringify({ hash, createdAt: new Date().toISOString() }));
+	return key;
+}
+
+export async function revokeFeedKey(b: R2Bucket, userId: string): Promise<void> {
+	const obj = await b.get(`feedusers/${userId}`);
+	if (!obj) return;
+	const { hash } = (await obj.json()) as { hash: string };
+	await b.delete([`feedkeys/${hash}`, `feedusers/${userId}`]);
 }
 
 export function visibilityOf(m: Manifest | null): Visibility {
@@ -185,7 +255,12 @@ export async function usage(b: R2Bucket, prefix: string): Promise<{ objects: num
 
 /** Remove everything the plugin ever stored. Used on uninstall. */
 export async function deleteAll(b: R2Bucket): Promise<number> {
-	return (await deletePrefix(b, "entries/")) + (await deletePrefix(b, "slugs/"));
+	return (
+		(await deletePrefix(b, "entries/")) +
+		(await deletePrefix(b, "slugs/")) +
+		(await deletePrefix(b, "feedkeys/")) +
+		(await deletePrefix(b, "feedusers/"))
+	);
 }
 
 export function revisionObjectKey(entryId: string): string {

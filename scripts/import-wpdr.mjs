@@ -28,7 +28,7 @@
  * working because revision numbers are preserved.
  */
 
-import { readFile, stat } from "node:fs/promises";
+import { open, readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
@@ -38,6 +38,9 @@ const { values, positionals } = parseArgs({
 		site: { type: "string" },
 		"dry-run": { type: "boolean", default: false },
 		only: { type: "string" },
+		// Files above this many bytes go through multipart upload (default 95 MB,
+		// under Cloudflare's per-request body limit). Lower it to test the path.
+		"multipart-over": { type: "string" },
 	},
 });
 
@@ -49,6 +52,7 @@ if (!bundleDir || !site || !token) {
 	process.exit(2);
 }
 const dryRun = values["dry-run"];
+const multipartOver = Number(values["multipart-over"] ?? 95 * 1024 * 1024);
 
 const bundle = JSON.parse(await readFile(join(bundleDir, "export.json"), "utf8"));
 if (bundle.format !== "wpdr-export" || bundle.version !== 1) {
@@ -89,6 +93,46 @@ async function api(path, { method = "GET", json, body, headers = {} } = {}) {
 }
 
 const CONTENT = "/_emdash/api/content/documents";
+
+/**
+ * Import one revision's file through R2 multipart upload: create, send parts
+ * (each under the per-request body limit), then complete with the
+ * revision's original metadata.
+ */
+async function importMultipart(id, path, size, contentType, qs) {
+	const { uploadId, key, partBytes } = await api(`${CONTENT}/${id}/files/uploads`, {
+		method: "POST",
+		json: { contentType, size },
+	});
+	const base = `${CONTENT}/${id}/files/uploads/${encodeURIComponent(uploadId)}`;
+	const keyQs = `key=${encodeURIComponent(key)}`;
+	// Read one part at a time, so multi-gigabyte files don't sit in memory.
+	const file = await open(path, "r");
+	const parts = [];
+	try {
+		for (let offset = 0, n = 1; offset < size; offset += partBytes, n++) {
+			const length = Math.min(partBytes, size - offset);
+			const chunk = Buffer.alloc(length);
+			await file.read(chunk, 0, length, offset);
+			parts.push(
+				await api(`${base}/parts/${n}?${keyQs}`, {
+					method: "PUT",
+					body: chunk,
+					headers: { "Content-Length": String(chunk.byteLength) },
+				}),
+			);
+		}
+		const meta = Object.fromEntries(qs);
+		const filename = meta.filename;
+		delete meta.filename;
+		await api(`${base}/complete`, { method: "POST", json: { key, parts, filename, import: meta } });
+	} catch (e) {
+		await api(`${base}?${keyQs}`, { method: "DELETE" }).catch(() => undefined);
+		throw e;
+	} finally {
+		await file.close();
+	}
+}
 
 /** EmDash users by lowercased email, for author mapping. */
 async function loadUsers() {
@@ -204,11 +248,15 @@ async function importDocument(doc, ctx) {
 		} else {
 			const path = resolve(bundleDir, rev.file.path);
 			const { size } = await stat(path);
-			await api(`${CONTENT}/${id}/files/import?${qs}`, {
-				method: "POST",
-				body: await readFile(path),
-				headers: { "Content-Type": rev.file.contentType, "Content-Length": String(size) },
-			});
+			if (size > multipartOver) {
+				await importMultipart(id, path, size, rev.file.contentType, qs);
+			} else {
+				await api(`${CONTENT}/${id}/files/import?${qs}`, {
+					method: "POST",
+					body: await readFile(path),
+					headers: { "Content-Type": rev.file.contentType, "Content-Length": String(size) },
+				});
+			}
 			uploadedAs.set(rev.file.attachmentId, rev.n);
 		}
 	}
@@ -217,6 +265,8 @@ async function importDocument(doc, ctx) {
 		await api(`${CONTENT}/${id}/files/source`, { method: "POST", json: { id: doc.wpId, site: bundle.site } });
 	}
 
+	// Always explicit: new EmDash documents start at the site default (private
+	// unless changed), so a public WordPress document has to be made public.
 	if (doc.status === "private") {
 		await api(`${CONTENT}/${id}/files/visibility`, { method: "POST", json: { mode: "private" } });
 	} else if (doc.password) {
@@ -225,6 +275,8 @@ async function importDocument(doc, ctx) {
 			method: "POST",
 			json: { mode: "password", password: doc.password },
 		});
+	} else {
+		await api(`${CONTENT}/${id}/files/visibility`, { method: "POST", json: { mode: "public" } });
 	}
 
 	if (doc.workflowStates.length) {

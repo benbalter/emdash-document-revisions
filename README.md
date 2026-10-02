@@ -10,19 +10,20 @@ A port of [WP Document Revisions](https://github.com/wp-document-revisions/wp-do
   - [`src/index.ts`](plugin/src/index.ts):
     - `documentRevisions()` is the EmDash plugin: the admin UI, plus lifecycle hooks for slug sync, cleanup on permanent delete, and uninstall.
     - `documentRevisionsRoutes()` is an Astro integration that injects the three routes below.
-  - [`src/routes/document.ts`](plugin/src/routes/document.ts) — the permalinks (`/documents/…`), streamed from R2, and the password form.
-  - [`src/routes/files.ts`](plugin/src/routes/files.ts) — per-document API under core's content namespace: `/_emdash/api/content/documents/:id/files` (log, upload), `…/restore`, `…/visibility`.
-  - [`src/routes/api.ts`](plugin/src/routes/api.ts) — site-wide API: `/_emdash/api/document-revisions/{me,storage,purge-orphans,purge-all}`.
+  - [`src/routes/document.ts`](plugin/src/routes/document.ts) — the permalinks (`/documents/…`), streamed from R2 with Range support, the password form, and revision feeds (`/documents/:slug/feed`).
+  - [`src/routes/files.ts`](plugin/src/routes/files.ts) — per-document API under core's content namespace: `/_emdash/api/content/documents/:id/files` (log, upload), `…/uploads/*` (multipart), `…/text`, `…/restore`, `…/visibility`, `…/import`.
+  - [`src/routes/api.ts`](plugin/src/routes/api.ts) — site-wide API: `/_emdash/api/document-revisions/{me,settings,columns,feed-key,storage,purge-orphans,purge-all}`.
   - [`src/visibility.ts`](plugin/src/visibility.ts) — `filterPublicDocuments()` for site templates that list documents.
+  - [`src/processing/`](plugin/src/processing/) and [`src/worker.ts`](plugin/src/worker.ts) — the text-extraction queue consumer (`emdash-document-revisions/worker`) and its processors.
   - [`src/access.ts`](plugin/src/access.ts) — access rules, the core edit-lock check, and password hashing and cookies.
   - [`src/store.ts`](plugin/src/store.ts) — the private R2 store: file objects plus one JSON manifest per document, updated with an etag compare-and-swap.
-  - [`src/admin.tsx`](plugin/src/admin.tsx) — the editor sidebar panel, plus the **Upload document** and **Document storage** admin pages.
+  - [`src/admin.tsx`](plugin/src/admin.tsx) — the editor sidebar panel, plus the **Upload document** and **Document settings** admin pages.
 - [`site/`](site/) — the EmDash Cloudflare starter, wired to the plugin. It adds:
   - a `documents` collection and a `workflow_state` taxonomy, in [`seed/seed.json`](site/seed/seed.json);
   - a `DOCUMENTS` R2 binding, in [`wrangler.jsonc`](site/wrangler.jsonc);
   - an example public listing at [`src/pages/documents/index.astro`](site/src/pages/documents/index.astro).
 - [`scripts/wpdr-export.php`](scripts/wpdr-export.php) and [`scripts/import-wpdr.mjs`](scripts/import-wpdr.mjs) — migrate from WP Document Revisions; see [Import from WordPress](#import-from-wordpress).
-- [`scripts/verify.sh`](scripts/verify.sh) — end-to-end checks (92) against a local dev server. [`scripts/verify-import.sh`](scripts/verify-import.sh) checks the importer (36) against a real WordPress in [Playground](https://wordpress.org/playground/).
+- [`scripts/verify.sh`](scripts/verify.sh) — end-to-end checks (127) against a local dev server. [`scripts/verify-import.sh`](scripts/verify-import.sh) checks the importer (36) against a real WordPress in [Playground](https://wordpress.org/playground/).
 
 ## Run it
 
@@ -49,6 +50,11 @@ To add a document, either use **Upload document** in the admin sidebar, or creat
 3. Add the `documents` collection to your seed. Copy it from [`site/seed/seed.json`](site/seed/seed.json). Leave `search` out of its `supports`; see "Private titles" below.
 4. Set `EMDASH_ENCRYPTION_KEY`. EmDash already requires it, and it also signs the cookies for password-protected documents.
 5. If your site lists documents, filter the list through `filterPublicDocuments()` (see the [example page](site/src/pages/documents/index.astro)).
+6. **Optional but recommended:**
+   - **Text extraction.** Add a `DOC_JOBS` queue (producer and consumer) to `wrangler.jsonc`, and export the consumer from your Worker entry: `queue: documentRevisionsQueue` from `emdash-document-revisions/worker` (see [`site/src/worker.ts`](site/src/worker.ts)). Plain-text formats are extracted as-is. For PDF, Office documents and images (OCR plus a description), also bind Workers AI as `AI`; extraction then uses [Markdown Conversion](https://developers.cloudflare.com/workers-ai/features/markdown-conversion/).
+   - **Password brute-force protection.** Add a `DOC_PASSWORD_LIMIT` [rate-limit binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/) (the example allows 5 attempts per minute per visitor and document).
+
+   Both are in [`site/wrangler.jsonc`](site/wrangler.jsonc). Without them, those features quietly turn off.
 
 ## Import from WordPress
 
@@ -93,10 +99,15 @@ Documents with a file over the upload limit (100 MB) are reported and skipped be
 | Drafts and past revisions | Contributor and up (core's `content:read_drafts`), and never more open than the current file. Everything else 404s, so slugs don't leak. |
 | Authors edit only their own | Author: own documents; Editor and up: any (core's `edit_own` / `edit_any`) |
 | Check-out lock | Core's entry edit lock, which the editor already acquires, renews and lets users take over. Uploads, restores and visibility changes are refused (409) while someone else holds it, which is the same rule core applies to saves. |
-| Upload limit | Streamed to R2; 100 MB per file, about Cloudflare's request-body limit on Free and Pro |
+| Upload limit | Up to 95 MB in one request. Larger files go to R2 in 50 MB parts (multipart upload, with progress and retries), up to 5 GB by default (`DOCUMENT_MAX_FILE_BYTES`). The importer does the same. |
+| New documents private by default | **Document settings** page (Admins): "New documents are private", the default as in WP Document Revisions, or public. |
+| Revision RSS feed with feed key | `/documents/:slug/feed?key=…` (Atom). Each user gets a secret key from the panel (shown once, revocable, stored hashed); the feed checks the user's current role and the document's visibility on every request. |
+| Admin list columns | **File** (type, size, revisions) and **Access** (visibility, who's editing) in the Documents list. |
+| Text extraction | A queue extracts text from every upload. The panel shows its status, and `GET …/files/text?n=` returns it. Plain-text formats are extracted locally; PDF and Office need a Workers AI binding. |
+| Streaming | Range requests (`206`, used by PDF viewers and media players) and `304` for an unchanged file, straight from R2. |
 | Workflow states | A taxonomy |
 | Migration | [Import from WordPress](#import-from-wordpress): full revision history, original numbering, authors, dates, notes, visibility and workflow states |
-| Trash / delete / uninstall | Trashed documents 404 but keep their files. Permanent delete removes the files, manifest and slug index. The **Document storage** page (Admins) shows usage, deletes files whose documents are gone, and can delete everything before you remove the plugin. |
+| Trash / delete / uninstall | Trashed documents 404 but keep their files. Permanent delete removes the files, manifest and slug index. The **Document settings** page (Admins) shows usage, deletes files whose documents are gone, and can delete everything before you remove the plugin. |
 | Slug change | A hook re-indexes the slug, and core adds a 301 from the old URL |
 
 ## Platform constraints
@@ -117,16 +128,18 @@ These are how EmDash 1.1 shapes the design. [docs/upstream-requests.md](docs/ups
 
    The sitemap isn't affected: core only builds sitemaps for collections with SEO enabled, and `documents` doesn't have it.
 5. **The lock check reads core's table directly.** Core exposes no lock handler outside its own routes, so [`access.ts`](plugin/src/access.ts) queries `_emdash_entry_locks` the same way `EntryLockRepository.findEnforceable` does. If a future EmDash renames or removes that table, writes **fail closed** with a 503 rather than skipping the check. The revision log stays readable.
-6. **Native plugins never get `plugin:uninstall`.** EmDash only runs it for marketplace and registry installs. The **Document storage** admin page covers the same ground. The hook is still registered in case the plugin ships through the registry.
+6. **Native plugins never get `plugin:uninstall`.** EmDash only runs it for marketplace and registry installs. The **Document settings** admin page covers the same ground. The hook is still registered in case the plugin ships through the registry.
 7. **Permissions are fixed.** Roles are fixed (Subscriber through Admin) and plugins can't define permissions. WordPress capabilities like `read_private_documents` become rules in [`access.ts`](plugin/src/access.ts).
 8. **Editor panels only mount on saved entries.** That's why there's a separate **Upload document** page.
 9. **Native plugin code doesn't hot-reload** under `astro dev`. Restart with `npx astro dev stop && npx astro dev`.
-10. **Cloudflare only.** The R2 binding comes from `cloudflare:workers`. A Node deployment would need an S3 adapter.
+10. **Cloudflare only.** The R2 binding comes from `cloudflare:workers`. A Node deployment would need an S3 adapter. It also opens doors: see [Cloudflare integrations](ROADMAP.md#cloudflare-integrations).
 11. **Password hashing is sized for the Free plan.** WebCrypto counts toward the Worker's CPU budget (about 10 ms on Free), so passwords default to 20k PBKDF2 iterations (about 1.4 ms on an M-series Mac). These are shared access codes, not account passwords; WordPress stores post passwords in plaintext. On Workers Paid, raise the count with the `DOCUMENT_PASSWORD_ITERATIONS` variable (10k–100k). The count is stored with each hash, so existing passwords keep working.
+12. **SSO for private documents.** EmDash supports [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) as a login method. Because every rule here uses EmDash's own roles, private documents work behind your SSO with no changes.
+13. **Revision feeds need plugin context.** Feed readers send no session, and anonymous site requests get no database. So the feed's permission check runs in a public plugin route (`feed-data`, which has the users and content APIs), called in-process; the site route renders the Atom, since plugin raw responses can't serve XML.
 
 ## Verification
 
-[`scripts/verify.sh`](scripts/verify.sh) runs 92 checks against `pnpm dev`, using miniflare D1 and R2, on EmDash 1.1.0. They cover:
+[`scripts/verify.sh`](scripts/verify.sh) runs 127 checks against `pnpm dev`, using miniflare D1 and R2, on EmDash 1.1.0. They cover:
 
 - permalink shapes;
 - draft, private and password access for each role;
@@ -142,7 +155,8 @@ These are how EmDash 1.1 shapes the design. [docs/upstream-requests.md](docs/ups
 - core field edits in the log;
 - documents kept out of public search, and listings filtered by visibility;
 - storage admin: role gating, orphan cleanup, the purge confirmation;
-- the lock check failing closed when core's table is missing.
+- the lock check failing closed when core's table is missing;
+- Range, `416` and `304`; 150 MiB multipart uploads, aborts and lock/ownership refusals; the password rate limit; queue-driven text extraction; the default-visibility setting; list columns; revision feeds and their keys.
 
 In Chrome I also tested, by hand:
 - the Upload document page;

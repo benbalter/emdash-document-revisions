@@ -6,7 +6,12 @@
  *   saved entries, so a brand-new document can't take a file from the editor.
  */
 
-import type { ContentEditorPanelContext, ContentEditorPanelExtension } from "@emdash-cms/admin";
+import type {
+	ContentEditorPanelContext,
+	ContentEditorPanelExtension,
+	ContentListColumnCellContext,
+	ContentListColumnExtension,
+} from "@emdash-cms/admin";
 import type { PluginAdminExports } from "emdash";
 import { apiFetch, parseApiResponse } from "emdash/plugin-utils";
 import * as React from "react";
@@ -40,14 +45,62 @@ function formatSize(bytes: number): string {
 
 const message = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
 
-function uploadFile(entryId: string, file: File, note: string) {
-	const qs = new URLSearchParams({ filename: file.name });
-	if (note.trim()) qs.set("note", note.trim());
-	return apiFetch(`${filesApi(entryId)}?${qs}`, {
-		method: "POST",
-		headers: { "Content-Type": file.type || "application/octet-stream" },
-		body: file,
-	});
+/** Above this, upload in parts: one request must stay under Cloudflare's body limit. */
+const SINGLE_REQUEST_MAX = 95 * 1024 * 1024;
+
+/**
+ * Upload a file as a new revision. Large files go through R2 multipart
+ * upload in parts, each retried up to three times; a failure aborts the
+ * upload so no partial file is left behind.
+ */
+async function uploadFile(
+	entryId: string,
+	file: File,
+	note: string,
+	onProgress?: (fraction: number) => void,
+): Promise<Response> {
+	const contentType = file.type || "application/octet-stream";
+	if (file.size <= SINGLE_REQUEST_MAX) {
+		const qs = new URLSearchParams({ filename: file.name });
+		if (note.trim()) qs.set("note", note.trim());
+		return apiFetch(`${filesApi(entryId)}?${qs}`, {
+			method: "POST",
+			headers: { "Content-Type": contentType },
+			body: file,
+		});
+	}
+
+	const { uploadId, key, partBytes } = await parseApiResponse<{ uploadId: string; key: string; partBytes: number }>(
+		await postJson(`${filesApi(entryId)}/uploads`, { contentType, size: file.size }),
+		"Could not start the upload",
+	);
+	const base = `${filesApi(entryId)}/uploads/${encodeURIComponent(uploadId)}`;
+	const keyQs = `key=${encodeURIComponent(key)}`;
+	const total = Math.ceil(file.size / partBytes);
+	const parts: Array<{ partNumber: number; etag: string }> = [];
+	try {
+		for (let i = 0; i < total; i++) {
+			const blob = file.slice(i * partBytes, Math.min(file.size, (i + 1) * partBytes));
+			for (let attempt = 1; ; attempt++) {
+				try {
+					parts.push(
+						await parseApiResponse(
+							await apiFetch(`${base}/parts/${i + 1}?${keyQs}`, { method: "PUT", body: blob }),
+							`Part ${i + 1} failed`,
+						),
+					);
+					break;
+				} catch (cause) {
+					if (attempt >= 3) throw cause;
+				}
+			}
+			onProgress?.((i + 1) / total);
+		}
+		return await postJson(`${base}/complete`, { key, parts, filename: file.name, note: note.trim() });
+	} catch (cause) {
+		await apiFetch(`${base}?${keyQs}`, { method: "DELETE" }).catch(() => undefined);
+		throw cause;
+	}
 }
 
 function postJson(url: string, body: unknown) {
@@ -118,6 +171,87 @@ function VisibilityControl({
 	);
 }
 
+/** Extraction state for a revision's file (see processing/). */
+function TextStatus({ text }: { text?: Revision["text"] }) {
+	const label =
+		!text || text.status === "pending"
+			? "Text: processing…"
+			: text.status === "done"
+				? `Text: extracted (${(text.chars ?? 0).toLocaleString()} characters${text.truncated ? ", truncated" : ""})`
+				: text.status === "skipped"
+					? "Text: not extracted for this file type"
+					: `Text: extraction failed${text.error ? ` (${text.error})` : ""}`;
+	return <div className="text-kumo-subtle">{label}</div>;
+}
+
+/**
+ * Per-user revision feed link. Feed readers can't send session cookies, so
+ * the URL carries a secret key; it's shown once when created.
+ */
+function FeedLink({ slug }: { slug: string }) {
+	const [hasKey, setHasKey] = React.useState<boolean>();
+	const [key, setKey] = React.useState<string>();
+	const [error, setError] = React.useState<string>();
+
+	React.useEffect(() => {
+		void (async () => {
+			try {
+				const r = await parseApiResponse<{ hasKey: boolean }>(await apiFetch(`${API}/feed-key`));
+				setHasKey(r.hasKey);
+			} catch (cause) {
+				setError(message(cause));
+			}
+		})();
+	}, []);
+
+	async function create() {
+		try {
+			const r = await parseApiResponse<{ key: string }>(await postJson(`${API}/feed-key`, {}), "Could not create a feed link");
+			setKey(r.key);
+			setHasKey(true);
+		} catch (cause) {
+			setError(message(cause));
+		}
+	}
+
+	async function revoke() {
+		try {
+			await parseApiResponse(await apiFetch(`${API}/feed-key`, { method: "DELETE" }), "Could not revoke");
+			setKey(undefined);
+			setHasKey(false);
+		} catch (cause) {
+			setError(message(cause));
+		}
+	}
+
+	if (hasKey === undefined && !error) return null;
+	const url = key ? `${window.location.origin}/documents/${encodeURIComponent(slug)}/feed?key=${key}` : null;
+	return (
+		<div className="space-y-1">
+			<h4 className="font-medium">Revision feed</h4>
+			{url ? (
+				<>
+					<input className="w-full rounded border px-2 py-1" readOnly value={url} onFocus={(e) => e.currentTarget.select()} />
+					<p className="text-kumo-subtle">Copy it now; it won't be shown again. The key works for every document you can read.</p>
+				</>
+			) : hasKey ? (
+				<p className="text-kumo-subtle">You have a feed key. Create a new link to see it again (the old one stops working).</p>
+			) : null}
+			<div className="flex gap-3">
+				<button type="button" className="underline" onClick={() => void create()}>
+					{hasKey ? "New feed link" : "Get feed link"}
+				</button>
+				{hasKey ? (
+					<button type="button" className="underline" onClick={() => void revoke()}>
+						Revoke
+					</button>
+				) : null}
+			</div>
+			{error ? <p className="text-kumo-danger">{error}</p> : null}
+		</div>
+	);
+}
+
 type TimelineItem =
 	| { kind: "file"; at: string; revision: Revision }
 	| { kind: "edit"; at: string; id: string; authorName: string | null };
@@ -127,6 +261,7 @@ function DocumentRevisionsPanel({ entry }: ContentEditorPanelContext) {
 	const [data, setData] = React.useState<RevisionsResponse>();
 	const [error, setError] = React.useState<string>();
 	const [busy, setBusy] = React.useState(false);
+	const [progress, setProgress] = React.useState<number | null>(null);
 	const [note, setNote] = React.useState("");
 	const fileInput = React.useRef<HTMLInputElement>(null);
 
@@ -200,7 +335,8 @@ function DocumentRevisionsPanel({ entry }: ContentEditorPanelContext) {
 								setError(`Files are limited to ${formatSize(data.maxUploadBytes)}.`);
 								return;
 							}
-							void run(() => uploadFile(entryId, file, note), "Upload failed").then((done) => {
+							void run(() => uploadFile(entryId, file, note, setProgress), "Upload failed").then((done) => {
+								setProgress(null);
 								if (done) setNote("");
 								if (fileInput.current) fileInput.current.value = "";
 							});
@@ -228,12 +364,18 @@ function DocumentRevisionsPanel({ entry }: ContentEditorPanelContext) {
 				/>
 			) : null}
 
-			{busy ? <p className="text-kumo-subtle">Working…</p> : null}
+			{busy ? (
+				<p className="text-kumo-subtle">
+					{progress === null ? "Working…" : `Uploading… ${Math.round(progress * 100)}%`}
+				</p>
+			) : null}
 			{error ? (
 				<p role="alert" className="text-kumo-danger">
 					{error}
 				</p>
 			) : null}
+
+			{data.slug ? <FeedLink slug={data.slug} /> : null}
 
 			<div>
 				<h4 className="font-medium">Revision log</h4>
@@ -260,6 +402,7 @@ function DocumentRevisionsPanel({ entry }: ContentEditorPanelContext) {
 									{new Date(item.revision.createdAt).toLocaleString()}
 								</div>
 								{item.revision.note ? <div>{item.revision.note}</div> : null}
+								<TextStatus text={item.revision.text} />
 								{canWrite && item.revision.n !== latestN ? (
 									<button
 										type="button"
@@ -297,6 +440,79 @@ export const contentEditorPanels = [
 		order: 1,
 	},
 ] satisfies readonly ContentEditorPanelExtension[];
+
+// --- Content-list columns -------------------------------------------------
+
+interface ColumnData {
+	visibility: VisibilityMode;
+	revisions?: number;
+	type?: string | null;
+	size?: number | null;
+	editingBy?: string | null;
+}
+
+/**
+ * One request per visible page of rows, shared by every cell: the cache is
+ * keyed by the sorted IDs, so N cells make one call.
+ */
+const columnCache = new Map<string, Promise<Record<string, ColumnData>>>();
+function loadColumns(ids: string[]): Promise<Record<string, ColumnData>> {
+	const cacheKey = [...ids].sort().join(",");
+	let pending = columnCache.get(cacheKey);
+	if (!pending) {
+		pending = apiFetch(`${API}/columns?ids=${encodeURIComponent(cacheKey)}`)
+			.then((res) => parseApiResponse<Record<string, ColumnData>>(res))
+			.catch(() => ({}));
+		columnCache.set(cacheKey, pending);
+		// Short-lived: lists re-render after edits, and locks change.
+		setTimeout(() => columnCache.delete(cacheKey), 15_000);
+	}
+	return pending;
+}
+
+function useColumn({ item, visibleItems }: ContentListColumnCellContext): ColumnData | undefined {
+	const [row, setRow] = React.useState<ColumnData>();
+	const ids = visibleItems.map((i) => String(i.id));
+	const id = String(item.id);
+	React.useEffect(() => {
+		let live = true;
+		void loadColumns(ids).then((all) => live && setRow(all[id]));
+		return () => {
+			live = false;
+		};
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [id, ids.join(",")]);
+	return row;
+}
+
+function FileCell(ctx: ContentListColumnCellContext) {
+	const row = useColumn(ctx);
+	if (!row) return <span className="text-kumo-subtle">…</span>;
+	if (!row.revisions) return <span className="text-kumo-subtle">No file</span>;
+	return (
+		<span>
+			{(row.type ?? "file").toUpperCase()} · {formatSize(row.size ?? 0)}
+			{row.revisions > 1 ? <span className="text-kumo-subtle"> · {row.revisions} revisions</span> : null}
+		</span>
+	);
+}
+
+function AccessCell(ctx: ContentListColumnCellContext) {
+	const row = useColumn(ctx);
+	if (!row) return <span className="text-kumo-subtle">…</span>;
+	const label = row.visibility === "password" ? "Password" : row.visibility === "private" ? "Private" : "Public";
+	return (
+		<span>
+			{label}
+			{row.editingBy ? <span className="text-kumo-danger"> · {row.editingBy} editing</span> : null}
+		</span>
+	);
+}
+
+export const contentListColumns = [
+	{ id: "document-file", label: "File", cell: FileCell, collections: ["documents"], order: 10 },
+	{ id: "document-access", label: "Access", cell: AccessCell, collections: ["documents"], order: 11 },
+] satisfies readonly ContentListColumnExtension[];
 
 // --- Upload document page -----------------------------------------------
 
@@ -434,9 +650,14 @@ function StoragePage() {
 	const [notice, setNotice] = React.useState<string>();
 	const [busy, setBusy] = React.useState(false);
 	const [confirm, setConfirm] = React.useState("");
+	const [defaultVisibility, setDefaultVisibility] = React.useState<"public" | "private">();
 
 	const load = React.useCallback(async () => {
 		try {
+			const settings = await parseApiResponse<{ defaultVisibility: "public" | "private" }>(
+				await apiFetch(`${API}/settings`),
+			);
+			setDefaultVisibility(settings.defaultVisibility);
 			setStats(await parseApiResponse<StorageStats>(await apiFetch(`${API}/storage`), "Could not load storage"));
 		} catch (cause) {
 			setError(message(cause));
@@ -468,7 +689,35 @@ function StoragePage() {
 
 	return (
 		<section className="max-w-xl space-y-4">
-			<h1 className="text-2xl font-semibold">Document storage</h1>
+			<h1 className="text-2xl font-semibold">Document settings</h1>
+			{defaultVisibility ? (
+				<label className="block space-y-1">
+					<span className="block font-medium">New documents are</span>
+					<select
+						className="rounded border px-2 py-1"
+						value={defaultVisibility}
+						disabled={busy}
+						onChange={async (e) => {
+							const value = e.currentTarget.value as "public" | "private";
+							setDefaultVisibility(value);
+							try {
+								await parseApiResponse(await postJson(`${API}/settings`, { defaultVisibility: value }), "Could not save");
+								setNotice("Saved.");
+							} catch (cause) {
+								setError(message(cause));
+							}
+						}}
+					>
+						<option value="private">Private (editors and the author only)</option>
+						<option value="public">Public once published</option>
+					</select>
+					<span className="block text-kumo-subtle">
+						WP Document Revisions makes new documents private by default. Each document can change it in its
+						panel.
+					</span>
+				</label>
+			) : null}
+			<h2 className="text-lg font-semibold">Storage</h2>
 			{stats ? (
 				<p>
 					{stats.documents} documents with files, {stats.objects} stored objects ({formatSize(stats.bytes)}).

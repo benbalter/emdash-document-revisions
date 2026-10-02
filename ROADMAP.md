@@ -1,46 +1,82 @@
 # Roadmap
 
-This lists what's left between this port and [WP Document Revisions](https://github.com/wp-document-revisions/wp-document-revisions)' [feature list](https://github.com/wp-document-revisions/wp-document-revisions/blob/main/docs/features.md). The core document behavior is done; see the [README](README.md#parity-with-wp-document-revisions). Estimates assume Claude doing the work with a human reviewing.
+This covers what's left between this port and [WP Document Revisions](https://github.com/wp-document-revisions/wp-document-revisions), plus what EmDash and Cloudflare make possible beyond it. Estimates assume Claude doing the work with a human reviewing.
 
-## Gaps found while building core parity
+**Done so far:**
+- the core document model and the [WordPress importer](README.md#import-from-wordpress);
+- private titles kept out of public search;
+- the **Document settings** page: default visibility, storage, cleanup;
+- the lock check failing closed;
+- `content:*` API tokens;
+- multipart uploads up to 5 GB;
+- Range and `304` requests;
+- password rate limiting;
+- queue-driven text extraction;
+- revision feeds with per-user keys;
+- admin list columns.
 
-Done: the WordPress importer ([README](README.md#import-from-wordpress)). Addressed so far: private titles kept out of public search and listings, uninstall cleanup (the **Document storage** page), the lock check failing closed, and `content:*` API tokens. See the README's [platform constraints](README.md#platform-constraints). The upstream changes that would remove the workarounds are drafted in [docs/upstream-requests.md](docs/upstream-requests.md).
+See the README's [parity table](README.md#parity-with-wp-document-revisions) and [platform constraints](README.md#platform-constraints). The EmDash changes that would remove workarounds are drafted in [docs/upstream-requests.md](docs/upstream-requests.md).
+
+## Parity audit: remaining gaps
+
+The audit covered WP Document Revisions' [feature list](https://github.com/wp-document-revisions/wp-document-revisions/blob/main/docs/features.md), its 77 filters and 11 actions, its shortcodes, blocks and widget, the block-editor sidebar, notifications, settings and admin list columns.
+
+| WP Document Revisions | Status | Proposed approach | Est. |
+|---|---|---|---|
+| Shortcodes, blocks, widget: `[documents]`, `[document_revisions]`, Latest Documents | Missing | Portable Text blocks plus Astro components (native `portableTextBlocks` / `componentsEntry`). The listing reuses `filterPublicDocuments`. | 3–4h |
+| `[document_preview]` | Missing | Portable Text block: PDF inline, other types as a download card, with an optional thumbnail (see Browser Rendering below). | 1–2h |
+| Email notifications on new revisions and workflow changes, with recipients | Missing | Needs a mail transport; see Email Sending below. Recipients go on the Document settings page. | 2h |
+| Lock-takeover email | Blocked | Core fires no takeover hook ([upstream request #2](docs/upstream-requests.md)). Until then, the panel could warn in-app. | 1h after the hook |
+| Configurable permalink base (`document_slug`) | Missing | Option on `documentRevisionsRoutes({ base })`, applied to `injectRoute` and `permalink()`. | 1h |
+| Featured image / thumbnail | Missing | An `image` field in the seed; automatic thumbnails via Browser Rendering. | 30m (field) |
+| PDF/DOCX/ODT text extraction | Partial | The pipeline is built; plain-text formats extract locally. PDF and Office need a Workers AI binding (`ai-markdown` processor, already written, untested against a remote binding). | 30m to verify |
+| Unified diff between revisions | Missing | Diff extracted text; render in the panel. | 1h |
+| AI revision summaries | Missing | See Workers AI below. | 2h |
+| Validate structure / `validate` CLI | Partial | The Document settings page finds orphans. Add "verify every manifest's objects exist" and a backfill to re-queue extraction. | 1h |
+| Serve-time hooks (`serve_document_auth`, `document_serve`, headers) | Missing | An options object on `documentRevisionsRoutes()`, once a real extension need appears. | — |
+| Abilities API → MCP | Partial | Core MCP covers entries. Add plugin `mcp.tools`: list revisions, fetch extracted text. | 1h |
+| i18n | Missing | Lingui catalogs for admin strings. | 1–2h |
+| Revision limit | Not planned | The port never deletes revisions, a stronger guarantee than WordPress's deletion guard. Add a limit only if asked. | — |
+| gzip, upload directory, review prompt, onboarding, help tabs | N/A | Edge compression, the R2 bucket, and WordPress.org-specific UI respectively. | — |
+
+### Other known gaps
 
 | Gap | Why | Proposed fix | Est. |
 |---|---|---|---|
-| **No email when someone takes over your lock** | WordPress emails the previous holder on a lock takeover. Core's takeover fires no hook. | Upstream request #2. Until then, the panel could poll and warn in-app. | 1h after the hook exists |
-| **Files over 100 MB** | Cloudflare rejects request bodies over the plan limit before the Worker runs (about 100 MB on Free and Pro, more on Business and Enterprise). | R2 multipart uploads: create, upload parts in ~50 MB chunks from the panel, complete. Or presigned S3-API URLs straight to R2. | 2–3h |
-| **First-write race on a new manifest** | The first manifest write is unconditional, so two simultaneous first uploads can drop one. | Use R2's `onlyIf: { etagDoesNotMatch: "*" }`, if R2 supports it, or write a sentinel object first. | 30m |
-| **Visibility isn't versioned** | Visibility lives in the manifest, not in the entry's fields, so a password can't leak through content APIs. As a result, EmDash's revisions don't record visibility changes. | Log visibility changes as timeline events in the manifest. | 30m |
-| **Public documents aren't in site search** | The collection's `search` is off so that private titles can't leak. That also leaves public documents out of public search. | Upstream request #4, or a plugin-owned public search route that filters by visibility. | 2h |
+| First-write race on a new manifest | Concurrent first writes, now less likely because the manifest is created when the entry is. | `onlyIf` on create, or a sentinel object. | 30m |
+| Visibility isn't versioned | It lives in the manifest so a password can't leak through content APIs. | Log visibility changes as timeline events. | 30m |
+| Public documents aren't in site search | `search` is off for the collection so that private titles can't leak. | AI Search (below), or [upstream request #4](docs/upstream-requests.md). | — |
 
-## Front end and integration
+## Cloudflare integrations
 
-| Gap | WP Document Revisions | Proposed approach | Est. |
-|---|---|---|---|
-| Revision RSS feed | Per-document feed of revisions, authenticated | `/documents/:slug/feed` site route, reusing `fileAccess()` for the same access rules | 1h |
-| Shortcodes, blocks, widget | `[documents]`, `[document_revisions]`, Recently Revised Documents widget | Portable Text blocks plus Astro components (native plugin `portableTextBlocks` / `componentsEntry`) | 3–4h |
-| `[document_preview]` | Inline document preview | Portable Text block that embeds the permalink (PDF inline, others as a download card) | 1–2h |
-| Email notifications | New revision or workflow-state change, configurable recipients | `content:afterSave` / upload handler → `ctx.email.send()`. Needs an email-provider plugin on the site. | 2h |
-| Settings page | Options screen | `admin.settingsSchema`: notification recipients, allowed file types, upload cap | 1h |
-| MCP and AI-agent access | Abilities API, read-only over MCP | Plugin `mcp.tools` backed by read-only routes (list documents, list revisions, fetch metadata) | 1h |
+These are designs, ready to build once remote bindings (and their small usage costs) are OK'd. Local dev can't fully emulate them.
 
-## Text extraction and AI
-
-| Gap | Proposed approach | Est. |
-|---|---|---|
-| PDF/DOCX/ODT text extraction with a cache | JS extractors (pdf.js, mammoth, an ODT XML reader) run from `cron` or a Queue consumer, cached in R2 next to each revision. Large PDFs may exceed Worker CPU limits; fall back to a Container. | 3–5h |
-| Unified diff between revisions | Diff the extracted text and render it in the panel | 1h |
-| AI revision summaries pre-filled into the note | Workers AI or a configured provider, with per-document and sitewide opt-outs | 2h |
-| Backfill and validate commands | No WP-CLI equivalent, so these become admin-page actions or MCP tools | 1–2h |
+1. **Permission-aware content search (AI Search).**
+   - **Indexing:** after extraction, the consumer writes `search/<entryId>.md` with R2 custom metadata `visibility`, `status` and `entry`, and rewrites it when visibility or status changes. An [AI Search](https://developers.cloudflare.com/ai-search/) instance over the bucket indexes only `search/**` (path filtering), with those as custom metadata fields.
+   - **Querying:** a public search route filters `visibility=public AND status=published` for anonymous visitors, and widens the filter by role for signed-in users. Natural-language answers come from the same instance.
+   - **Why it matters:** this fixes "public documents aren't in site search" and adds contents search, which WordPress never had.
+   - **Limits:** plain text is indexed up to 10 MiB, which is why the pre-extracted Markdown is indexed rather than the original file.
+2. **Extraction for every format (Workers AI `toMarkdown`).** Bind `AI` and the `ai-markdown` processor handles PDF, Office, spreadsheets, HTML and images (with OCR and descriptions). Test it against a remote binding, then add a backfill action.
+3. **AI revision summaries and "ask this document".**
+   - Workers AI over the diff of two revisions' extracted text pre-fills the revision note, with a per-document and a sitewide opt-out. Optionally routed through [AI Gateway](https://developers.cloudflare.com/ai-gateway/) for caching and logs.
+   - Expose "summarize" and "ask" as plugin MCP tools that use the same permission checks.
+4. **Email Sending provider plugin.**
+   - A small EmDash email transport backed by the [`EMAIL` binding](https://developers.cloudflare.com/email-service/api/send-emails/workers-api/). It benefits the whole site and unblocks the notifications above.
+   - Needs Workers Paid and a verified sending domain.
+5. **Thumbnails and previews (Browser Rendering).**
+   - Render page one of PDFs and Office documents (via the extracted HTML) to PNG.
+   - Store the image next to the file.
+   - Use it in list cards, `[document_preview]` and the editor panel.
+6. **Download analytics (Analytics Engine).** One data point per download (document, revision, anonymous or signed-in), with a small chart in the panel. WordPress had no equivalent.
+7. **Retention and legal hold (R2 bucket locks).** For regulated libraries, lock the `entries/*/files/` prefix for a retention period so even an Admin purge can't delete files early. The storage page would need to explain why a purge partly fails. Investigate.
+8. **Turnstile on the password form**, if rate limiting alone isn't enough for a public-facing site.
 
 ## Migration and quality
 
 | Gap | Proposed approach | Est. |
 |---|---|---|
-| Unit tests and CI | Unit tests for `store.ts` / `access.ts` with EmDash's plugin test runtime. Run [`scripts/verify.sh`](scripts/verify.sh) in CI against `astro dev`. | 2–3h |
-| i18n | Admin strings through Lingui, EmDash's admin i18n, rather than GlotPress | 1–2h |
-| Publish to npm | Build step (tsdown), `peerDependencies`, install docs (the README covers the manual steps) | 1h |
+| Unit tests and CI | Unit tests for `store.ts`, `access.ts` and `processing/`. Run [`scripts/verify.sh`](scripts/verify.sh) and [`scripts/verify-import.sh`](scripts/verify-import.sh) in CI against `astro dev`. | 2–3h |
+| Publish to npm | Build step (tsdown), `peerDependencies`, install docs. | 1h |
 
 ## Can't match exactly
 

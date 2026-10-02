@@ -22,6 +22,14 @@
 			"bucket_name": "my-emdash-documents",
 		},
 	],
+	// Document processing (emdash-document-revisions): uploads enqueue a
+	// job; the Worker's queue handler extracts text.
+	"queues": {
+		"producers": [{ "binding": "DOC_JOBS", "queue": "document-jobs" }],
+		"consumers": [{ "queue": "document-jobs", "max_batch_size": 5, "max_batch_timeout": 1, "max_retries": 3 }],
+	},
+	// Throttles password attempts on protected documents.
+	"ratelimits": [{ "name": "DOC_PASSWORD_LIMIT", "namespace_id": "1001", "simple": { "limit": 5, "period": 60 } }],
 	// Sandboxed plugins require Worker Loader, available on Workers paid plans. Uncomment to enable:
 	// "worker_loaders": [{ "binding": "LOADER" }],
 	// General maintenance cron trigger

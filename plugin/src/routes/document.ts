@@ -115,7 +115,74 @@ async function cookieValid(r: Resolved, cookies: AstroCookies): Promise<boolean>
 	return passwordCookieValid(r.manifest, cookies.get(passwordCookieName(r.entry.id))?.value);
 }
 
-export const GET: APIRoute = async ({ params, locals, cookies }) => {
+interface FeedData {
+	ok: true;
+	title: string;
+	slug: string;
+	updatedAt: string;
+	revisions: Array<{
+		n: number;
+		filename: string;
+		url: string;
+		createdAt: string;
+		authorName: string | null;
+		note: string | null;
+		size: number;
+	}>;
+}
+
+/**
+ * /documents/:slug/feed?key=… — the document's revision log as Atom, for
+ * feed readers (which can't send session cookies, hence the per-user key).
+ * Permission checks run in the plugin's public `feed-data` route, which has
+ * the plugin context (users, drafts) that anonymous site requests lack.
+ */
+async function feed(locals: App.Locals, url: URL, slug: string): Promise<Response> {
+	const handler = locals.emdash?.handlePublicPluginApiRoute;
+	const key = url.searchParams.get("key") ?? "";
+	if (typeof handler !== "function" || !key) return notFound();
+	const dataUrl = new URL("/_emdash/api/plugins/document-revisions/feed-data", url);
+	dataUrl.searchParams.set("doc", slug);
+	dataUrl.searchParams.set("key", key);
+	const res = await handler("document-revisions", "GET", "feed-data", new Request(dataUrl));
+	const data = (res?.success ? res.data : null) as FeedData | { ok: false } | null;
+	if (!data || !data.ok) return notFound();
+
+	const x = escapeHtml;
+	const self = `${url.origin}/documents/${encodeURIComponent(slug)}/feed`;
+	const entries = data.revisions
+		.map(
+			(r) => `<entry>
+<id>${x(url.origin + r.url)}</id>
+<title>${x(`Revision ${r.n}: ${r.filename}`)}</title>
+<link rel="alternate" href="${x(url.origin + r.url)}"/>
+<updated>${x(r.createdAt)}</updated>
+<author><name>${x(r.authorName ?? "Unknown")}</name></author>
+<summary>${x(r.note ?? "")}</summary>
+</entry>`,
+		)
+		.join("\n");
+	const xml = `<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+<id>${x(self)}</id>
+<title>${x(`${data.title}: revisions`)}</title>
+<link rel="self" href="${x(self)}"/>
+<link rel="alternate" href="${x(`${url.origin}/documents/${encodeURIComponent(slug)}`)}"/>
+<updated>${x(data.updatedAt)}</updated>
+${entries}
+</feed>`;
+	return new Response(xml, {
+		headers: {
+			"Content-Type": "application/atom+xml; charset=utf-8",
+			"Cache-Control": "private, no-store",
+			"X-Robots-Tag": "noindex",
+		},
+	});
+}
+
+export const GET: APIRoute = async ({ params, locals, cookies, request, url }) => {
+	const parts = (params.path ?? "").split("/").filter(Boolean);
+	if (parts.length === 2 && parts[1] === "feed") return feed(locals, url, decodeURIComponent(parts[0]!));
 	const r = await resolve(locals, params.path ?? "");
 	if (!r) return notFound();
 
@@ -127,25 +194,94 @@ export const GET: APIRoute = async ({ params, locals, cookies }) => {
 	// 404 rather than 403 so private document slugs don't leak.
 	if (access === "deny") return notFound();
 
-	const obj = await (await bucket()).get(r.revision.key);
-	if (!obj) return notFound();
+	const b = await bucket();
+	const head = await b.head(r.revision.key);
+	if (!head) return notFound();
 
 	const isPublic =
 		r.n === null && r.entry.status === "published" && (r.manifest.visibility?.mode ?? "public") === "public";
 
 	const headers: Record<string, string> = {
 		"Content-Type": r.revision.contentType,
-		"Content-Length": String(r.revision.size),
 		"Content-Disposition": contentDisposition(r.revision.filename, r.revision.contentType),
 		"X-Content-Type-Options": "nosniff",
 		"Cache-Control": isPublic ? "public, max-age=60" : "private, no-store",
-		ETag: obj.httpEtag,
+		"Accept-Ranges": "bytes",
+		ETag: head.httpEtag,
 	};
 	// Chrome's PDF viewer renders blank under a sandbox CSP. PDFs are the
 	// only inline type it's dropped for; scriptable types never go inline.
 	if (r.revision.contentType !== "application/pdf") headers["Content-Security-Policy"] = "sandbox";
-	return new Response(obj.body as unknown as ReadableStream, { headers });
+
+	// Conditional request: the file at this URL is unchanged.
+	if (etagMatches(request.headers.get("if-none-match"), head.httpEtag)) {
+		return new Response(null, { status: 304, headers });
+	}
+
+	// Single byte range, which is what PDF viewers and media players send.
+	// Multi-range requests get the whole file, which RFC 9110 allows.
+	const range = parseRange(request.headers.get("range"), head.size);
+	if (range === "unsatisfiable") {
+		return new Response(null, { status: 416, headers: { ...headers, "Content-Range": `bytes */${head.size}` } });
+	}
+	const obj = await b.get(r.revision.key, range ? { range } : undefined);
+	if (!obj) return notFound();
+	if (range) {
+		const end = range.offset + range.length - 1;
+		return new Response(obj.body as unknown as ReadableStream, {
+			status: 206,
+			headers: {
+				...headers,
+				"Content-Length": String(range.length),
+				"Content-Range": `bytes ${range.offset}-${end}/${head.size}`,
+			},
+		});
+	}
+	return new Response(obj.body as unknown as ReadableStream, {
+		headers: { ...headers, "Content-Length": String(head.size) },
+	});
 };
+
+function etagMatches(header: string | null, etag: string): boolean {
+	if (!header) return false;
+	if (header.trim() === "*") return true;
+	const bare = (t: string) => t.trim().replace(/^W\//, "");
+	return header.split(",").some((t) => bare(t) === bare(etag));
+}
+
+/** Parse a single `bytes=` range against a file size. null = serve the whole file. */
+function parseRange(header: string | null, size: number): { offset: number; length: number } | "unsatisfiable" | null {
+	if (!header) return null;
+	const m = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+	if (!m || (m[1] === "" && m[2] === "")) return null;
+	if (m[1] === "") {
+		// Suffix range: the last N bytes.
+		const n = Number(m[2]);
+		if (n === 0) return "unsatisfiable";
+		const length = Math.min(n, size);
+		return { offset: size - length, length };
+	}
+	const start = Number(m[1]);
+	if (start >= size) return "unsatisfiable";
+	const end = m[2] === "" ? size - 1 : Math.min(Number(m[2]), size - 1);
+	if (end < start) return null;
+	return { offset: start, length: end - start + 1 };
+}
+
+/**
+ * Throttle password guesses per client and document. Uses the site's
+ * DOC_PASSWORD_LIMIT rate-limit binding; without it, unthrottled.
+ */
+async function passwordAttemptAllowed(request: Request, entryId: string): Promise<boolean> {
+	const { env } = await import("cloudflare:workers");
+	const limiter = (env as Record<string, unknown>).DOC_PASSWORD_LIMIT as
+		| { limit: (opts: { key: string }) => Promise<{ success: boolean }> }
+		| undefined;
+	if (!limiter) return true;
+	const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
+	const { success } = await limiter.limit({ key: `${ip}:${entryId}` });
+	return success;
+}
 
 /** Password form submission. */
 export const POST: APIRoute = async ({ params, locals, request, url }) => {
@@ -156,6 +292,12 @@ export const POST: APIRoute = async ({ params, locals, request, url }) => {
 	const r = await resolve(locals, params.path ?? "");
 	if (!r || r.manifest.visibility?.mode !== "password" || r.entry.status !== "published") {
 		return notFound();
+	}
+	if (!(await passwordAttemptAllowed(request, r.entry.id))) {
+		return new Response("Too many attempts. Try again in a minute.", {
+			status: 429,
+			headers: { "Retry-After": "60", "Cache-Control": "private, no-store" },
+		});
 	}
 	const form = await request.formData().catch(() => null);
 	const password = form?.get("password");
