@@ -17,6 +17,7 @@
 import type { APIRoute, AstroCookies } from "astro";
 
 import {
+	accountActive,
 	fileAccess,
 	getEntry,
 	getPublishedEntry,
@@ -160,27 +161,6 @@ ${entries}
 			"X-Robots-Tag": "noindex",
 		},
 	});
-}
-
-/**
- * Whether a user account is enabled, read from EmDash's `users` table through
- * the site's D1 binding (`DB`, or the name in DOCUMENT_D1_BINDING). Anonymous
- * requests have no database on locals, and EmDash's plugin user API omits the
- * disabled flag. Fails closed: no binding or a failed query counts as disabled.
- */
-async function accountActive(userId: string): Promise<boolean> {
-	try {
-		const { env } = await import("cloudflare:workers");
-		const vars = env as Record<string, unknown>;
-		const name = typeof vars.DOCUMENT_D1_BINDING === "string" ? vars.DOCUMENT_D1_BINDING : "DB";
-		const db = vars[name] as D1Database | undefined;
-		if (!db) throw new Error(`No D1 binding named ${name}`);
-		const row = await db.prepare("SELECT disabled FROM users WHERE id = ?").bind(userId).first<{ disabled: number }>();
-		return row !== null && !row.disabled;
-	} catch (e) {
-		console.error("[document-revisions] can't check whether a feed key's account is disabled", e);
-		return false;
-	}
 }
 
 export const GET: APIRoute = async ({ params, locals, cookies, request, url }) => {

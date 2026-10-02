@@ -24,7 +24,7 @@ import type { AstroIntegration } from "astro";
 import type { PluginDescriptor } from "emdash";
 import { definePlugin, definePluginRoute } from "emdash";
 
-import { fileAccess, type Entry, type User } from "./access";
+import { accountActive, fileAccess, type Entry, type User } from "./access";
 import {
 	bucket,
 	COLLECTION,
@@ -170,7 +170,9 @@ export function createPlugin() {
 					const b = await bucket();
 					const userId = await feedKeyUser(b, q.get("key") ?? "");
 					const user = userId ? await ctx.users?.get(userId) : null;
-					if (!user) return denied;
+					// This route is reachable directly, not only through the site's feed
+					// route, so check here that the key's account isn't disabled.
+					if (!user || !(await accountActive(user.id))) return denied;
 					const slug = q.get("doc") ?? "";
 					const entryId = slug ? await entryIdForSlug(b, slug) : null;
 					const item = entryId ? await ctx.content?.get(COLLECTION, entryId) : null;
@@ -192,7 +194,7 @@ export function createPlugin() {
 					if (access !== "allow") return denied;
 					return {
 						ok: true as const,
-						// The site route checks this account isn't disabled (see accountActive()).
+						// The site route re-checks this account isn't disabled (see accountActive()).
 						userId: user.id,
 						title: String(item.data.title ?? slug),
 						slug,
