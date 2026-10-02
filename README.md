@@ -1,32 +1,41 @@
 # EmDash Document Revisions
 
-Document management for [EmDash](https://github.com/emdash-cms/emdash): each document is a series of uploaded files with a revision log. Files are stored privately and served only through permission-checked permalinks.
+Document management for [EmDash](https://github.com/emdash-cms/emdash). Each document is a series of uploaded files with a revision log, and files are served only through permission-checked links. Think policies, handbooks, board minutes, contracts: files a team keeps updating, where people need the current version, the history of who changed what, and some documents kept private.
 
-It's a port of [WP Document Revisions](https://github.com/wp-document-revisions/wp-document-revisions), the WordPress plugin, rewritten in TypeScript for EmDash on Cloudflare Workers. None of the PHP code carries over. A [WordPress importer](#import-from-wordpress) moves existing libraries over, history included.
+It's a TypeScript port of [WP Document Revisions](https://github.com/wp-document-revisions/wp-document-revisions), the WordPress plugin, for EmDash on Cloudflare Workers. If you're moving a WordPress site to EmDash, the [importer](#import-from-wordpress) brings your document library along, history and old links included.
 
-> **Status: early.** Built and tested against EmDash 1.1 on Cloudflare Workers. It isn't published to npm yet, and APIs may change before 1.0. Not affiliated with EmDash or Cloudflare.
+> [!WARNING]
+> **Early and unproven.** It's been built and tested end to end against EmDash 1.1 in Cloudflare's local runtime, but not yet run on a production Cloudflare deployment. It isn't on npm, APIs may change before 1.0, and it relies on a few EmDash internals that a future EmDash release could move (see [Upgrading](#upgrading)). Try it on a test site first, and please [report what you find](https://github.com/benbalter/emdash-document-revisions/issues). Not affiliated with EmDash or Cloudflare.
+
+| The documents list, with file and access columns | The editor's Document revisions panel |
+|---|---|
+| ![Admin documents list showing five documents with file type, size, revision count and access level](docs/screenshots/admin-list.png) | ![Editor sidebar panel with the permalink, upload control, visibility options, feed link and a three-entry revision log](docs/screenshots/editor-panel.png) |
+
+![The public Documents page as an anonymous visitor sees it: only the two public documents are listed](docs/screenshots/public-list.png)
+
+*What a visitor sees on the same site: the private and password-protected documents aren't listed at all.*
 
 ## Features
 
 - **Versioned documents.** Every upload becomes a numbered revision with author, date and note. Restore any earlier revision.
-- **Private storage.** Files live in their own R2 bucket and are only reachable through `/documents/…` permalinks, which check permissions on every request. This includes Range requests for PDF viewers and media players.
+- **Private storage.** Files live in their own R2 bucket and are reachable only through `/documents/…` links, which check permissions on every request, including Range requests from PDF viewers and media players.
 - **Visibility per document:** public, private (Editors, Admins and the author) or password-protected. New documents are private by default, as in WP Document Revisions.
-- **WordPress-style permalinks.** `/documents/tps-report.pdf`, `/documents/tps-report-revision-3.pdf`, and the dated `/documents/2011/08/…` form.
+- **Stable links.** `/documents/tps-report.pdf` always serves the latest file; `/documents/tps-report-revision-3.pdf` serves revision 3. The dated `/documents/2011/08/…` form from WordPress works too.
 - **Check-out locking** through EmDash's own edit lock. Nobody uploads over someone who's editing.
 - **Large files.** Uploads up to 5 GB in resumable parts, with progress.
-- **Revision feeds.** An Atom feed per document, authenticated with a per-user feed key.
+- **Revision feeds.** An Atom feed per document, authenticated with a per-user feed key, so you can follow changes in a feed reader.
 - **Text extraction.** A queue extracts text from each upload: plain-text formats locally, and PDF, Office and images through [Workers AI](https://developers.cloudflare.com/workers-ai/features/markdown-conversion/) when bound.
 - **Front-end blocks:** Document list, Latest documents (also a sidebar widget), Document revisions and Document preview.
 - **Admin tools.** An editor panel, an Upload document page, File and Access columns in the documents list, and a Document settings page (default visibility, feed keys, storage cleanup).
-- **WordPress importer** that keeps revision numbers, authors, dates, notes, visibility and workflow states, so old links keep working.
 - **Search** that includes public documents but never shows a visitor a private or password-protected title.
 - **SSO-ready.** EmDash supports [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) logins, and every rule here uses EmDash's roles, so private documents work behind your SSO unchanged.
 
 ## Requirements
 
-- Node.js 22.16 or later, and pnpm.
-- An EmDash 1.1 site on **Cloudflare Workers** with R2. The plugin uses Cloudflare bindings directly; see [Running outside Cloudflare](#running-outside-cloudflare).
-- Optional: Cloudflare Queues (text extraction), the Workers rate-limit binding (password throttling), and Workers AI (PDF/Office/image text).
+- An EmDash 1.1 site on **Cloudflare Workers**, with R2. The plugin uses Cloudflare bindings directly and doesn't run on EmDash's Node adapter yet ([why](docs/architecture.md#running-outside-cloudflare)).
+- Node.js 22.16 or later and pnpm, to build and deploy.
+- Optional: Cloudflare Queues (text extraction), the Workers rate-limit binding (password throttling), and Workers AI (PDF, Office and image text).
+- Familiarity with editing `astro.config.mjs` and `wrangler.jsonc`. This is a native EmDash plugin, so there's no one-click install from EmDash's registry ([why](docs/architecture.md#why-a-native-plugin-not-a-sandboxed-one)).
 
 ## Quick start
 
@@ -49,7 +58,7 @@ To add a document, use **Upload document** in the admin sidebar, or create a Doc
 
 Until it's on npm, add the package from a local checkout, e.g. `pnpm add ../emdash-document-revisions/plugin`, or as a workspace package.
 
-1. **Register both halves** in `astro.config.mjs`. A native EmDash plugin can't inject site routes, so the permalink and API routes come from a separate Astro integration.
+1. **Register both halves** in `astro.config.mjs`. A native EmDash plugin can't add site routes, so the document links and API come from a separate Astro integration.
    ```js
    import { documentRevisions, documentRevisionsRoutes } from "emdash-document-revisions";
    // ...
@@ -58,10 +67,23 @@ Until it's on npm, add the package from a local checkout, e.g. `pnpm add ../emda
      documentRevisionsRoutes(),
    ],
    ```
-2. **Add a `DOCUMENTS` R2 bucket** in `wrangler.jsonc`. It must be a **different bucket** from EmDash's media bucket, because EmDash serves every media-bucket key publicly (see [constraint 1](#platform-constraints)).
-3. **Add the `documents` collection** (and, if you want them, the `workflow_state` taxonomy) to your seed. Copy them from [`site/seed/seed.json`](site/seed/seed.json). Search can stay on: the plugin filters restricted documents out of search results (see [constraint 4](#platform-constraints)).
-4. **Set `EMDASH_ENCRYPTION_KEY`.** EmDash already requires it, and this plugin also signs password-protected documents' cookies with it.
-5. **Listing documents in your own templates:** use the Document list component (as [`site/src/pages/documents/index.astro`](site/src/pages/documents/index.astro) does), or filter `getEmDashCollection("documents")` through `filterPublicDocuments()` from `emdash-document-revisions/visibility`. Otherwise private and password-protected titles appear in public listings.
+2. **Add a `DOCUMENTS` R2 bucket** to `wrangler.jsonc`. It must be a **different bucket** from EmDash's media bucket, because EmDash serves every file in the media bucket to anyone who has its key.
+   ```jsonc
+   "r2_buckets": [
+     { "binding": "MEDIA", "bucket_name": "my-site-media" },
+     { "binding": "DOCUMENTS", "bucket_name": "my-site-documents" }
+   ]
+   ```
+3. **Add the `documents` collection.** Plugins can't create collections, so your site needs one.
+   - **New site:** copy the `documents` collection, the `workflow_state` taxonomy and the Documents menu link from [`site/seed/seed.json`](site/seed/seed.json) into your seed before the site's database is first created.
+   - **Existing site:** EmDash applies seeds only to a new database, so run the setup script instead. It creates or repairs the collection, its fields and search, and the workflow states, and is safe to re-run:
+     ```sh
+     EMDASH_TOKEN=ec_pat_… node scripts/setup-collection.mjs --site https://your-site.example --dry-run
+     EMDASH_TOKEN=ec_pat_… node scripts/setup-collection.mjs --site https://your-site.example
+     ```
+     The token needs the `admin` scope (**Settings → API tokens**, as an Administrator). Add `--no-workflow-states` to skip the taxonomy.
+4. **Set `EMDASH_ENCRYPTION_KEY`.** EmDash already requires it; this plugin also signs password-protected documents' cookies with it.
+5. **List documents safely in your own templates.** Use the Document list component, as [`site/src/pages/documents/index.astro`](site/src/pages/documents/index.astro) does, or filter `getEmDashCollection("documents")` through `filterPublicDocuments()` from `emdash-document-revisions/visibility`. A raw `getEmDashCollection("documents")` will show private and password-protected titles to everyone. (EmDash's own search is filtered for you.)
 6. **Optional, recommended:**
    - **Text extraction.** Add a `DOC_JOBS` queue (producer and consumer) to `wrangler.jsonc`, and add the consumer to your Worker entry:
      ```ts
@@ -73,6 +95,19 @@ Until it's on npm, add the package from a local checkout, e.g. `pnpm add ../emda
 
    [`site/wrangler.jsonc`](site/wrangler.jsonc) and [`site/src/worker.ts`](site/src/worker.ts) show both. Without them, those features switch off quietly.
 
+### Deploy to Cloudflare
+
+Create the resources your `wrangler.jsonc` names, then deploy as usual for EmDash. With the demo site's names:
+
+```sh
+npx wrangler r2 bucket create my-emdash-documents
+npx wrangler queues create document-jobs        # if you added text extraction
+npx wrangler secret put EMDASH_ENCRYPTION_KEY   # if your site doesn't have it yet
+pnpm --filter site run deploy                   # astro build && wrangler deploy
+```
+
+The rate-limit binding needs no setup beyond its `namespace_id`, any number unique within your account. If your site's D1 binding isn't named `DB`, set `DOCUMENT_D1_BINDING` (see below), or revision feeds will be refused.
+
 ### Configuration reference
 
 | Name | Kind | Required | Purpose |
@@ -83,13 +118,14 @@ Until it's on npm, add the package from a local checkout, e.g. `pnpm add ../emda
 | `AI` | Workers AI binding | No | PDF, Office and image extraction (Markdown Conversion). Remote; incurs Workers AI usage. |
 | `DOC_PASSWORD_LIMIT` | Rate-limit binding | No | Throttles password attempts per visitor and document (the demo allows 5 a minute). Cloudflare counts per location and approximately. |
 | `DOCUMENT_MAX_FILE_BYTES` | Variable | No | Largest upload, default 5 GB. |
-| `DOCUMENT_PASSWORD_ITERATIONS` | Variable | No | PBKDF2 cost for document passwords, default 20,000 (sized for Workers Free); 10,000–100,000. |
+| `DOCUMENT_PASSWORD_ITERATIONS` | Variable | No | PBKDF2 cost for document passwords, default 20,000 (sized for Workers Free's CPU limit); 10,000–100,000. Raise it on Workers Paid. |
 | `DOCUMENT_D1_BINDING` | Variable | No | Name of the site's D1 binding (default `DB`), used to refuse feed keys of disabled accounts. Without a readable D1 database, feeds are refused. |
 
 ## Using it
 
-- **Upload.** Use **Upload document** for a new document, or the **Document revisions** panel in the editor for a new version. EmDash only shows editor panels on saved entries. Files over 95 MB upload in parts automatically.
-- **Revision log and restore.** The panel lists every file revision, plus EmDash's own edits to the title and other fields. **Restore** re-instates an older file as a new revision.
+- **Upload.** Use **Upload document** in the admin sidebar for a new document, or the **Document revisions** panel in the editor's sidebar for a new version. EmDash only shows editor panels on saved entries. Files over 95 MB upload in parts automatically.
+- **Publish.** A document is a normal EmDash entry: visitors can open it only once it's published, and then its visibility decides who can.
+- **Revision log and restore.** The panel lists every file revision, plus EmDash's own edits to the title and other fields. **Restore** re-instates an older file as a new revision, so nothing is ever lost.
 - **Visibility.** Set it per document in the panel. Admins set the default for new documents on **Document settings**.
 - **Locking.** While someone has a document open in the editor, others can't upload, restore or change visibility. EmDash's editor shows who holds the lock and lets users take it over.
 - **Feeds.** **Get feed link** in the panel creates your personal feed key. It's shown once, and you can replace or revoke it.
@@ -176,104 +212,53 @@ File names become `slug.ext`, as WP Document Revisions serves them, because Word
 
 Still to come: email notifications, configurable permalink base, diffs and AI summaries, and more. See [ROADMAP.md](ROADMAP.md).
 
-## How it works
+## Troubleshooting
 
-```
-plugin/src/
-  index.ts           documentRevisions() — the EmDash plugin: admin UI, Portable Text blocks, lifecycle hooks
-                     documentRevisionsRoutes() — Astro integration that injects the three routes below
-  routes/document.ts /documents/… permalinks (streamed from R2, Range/304), password form, Atom feeds
-  routes/files.ts    per-document API under EmDash's content namespace
-  routes/api.ts      site-wide API
-  access.ts          access rules, EmDash edit-lock check, password hashing and cookies
-  store.ts           private R2 store: files + one JSON manifest per document (etag compare-and-swap)
-  blocks.ts, astro/  front-end blocks: viewer-aware data and Astro renderers
-  processing/, worker.ts   text-extraction queue consumer and processors
-  visibility.ts      filterPublicDocuments() for site templates
-  admin.tsx          editor panel, Upload document and Document settings pages, list columns
-```
+- **A visitor gets a 404 for a document I just published.** New documents are private by default. Set the document to **Public** in the editor's Document revisions panel, or change the default on **Document settings**. The 404 (rather than a 403) is deliberate, so private slugs don't leak.
+- **"… is editing this document" (409) when uploading or restoring.** Someone has the document open in EmDash's editor. Wait for them to close it, or take over the lock from the editor.
+- **"Can't verify the document's edit lock" (503) on every upload.** The plugin couldn't reach EmDash's edit-lock check, most likely after an EmDash upgrade. Writes are refused rather than risk overwriting someone's work; see [Upgrading](#upgrading).
+- **The panel says "Text: processing…" and never finishes.** No `DOC_JOBS` queue is bound, or the Worker entry doesn't export `queue: documentRevisionsQueue`. Extraction is optional; see install step 6. PDF and Office files also need the `AI` binding, or they show "not extracted for this file type".
+- **Revision feed links return 404.** The feed checks that the key's owner still has an active account, which needs the site's D1 database. If your binding isn't named `DB`, set `DOCUMENT_D1_BINDING`.
+- **Private document titles show up on a page I built.** That page lists documents without filtering them; see install step 5.
+- **The Documents collection is missing on an existing site.** Seeds only apply to new databases; run [`scripts/setup-collection.mjs`](scripts/setup-collection.mjs) (install step 3).
 
-**API.** All endpoints use EmDash's authentication, CSRF and API-token rules. Responses use EmDash's `{ success, data | error }` envelope.
+## Backups
 
-| Endpoint | Purpose |
-|---|---|
-| `GET /_emdash/api/content/documents/:id/files` | Revision log, visibility, lock state |
-| `POST …/files?filename=…&note=…` | Upload a revision (raw body, up to 95 MB) |
-| `POST …/files/uploads`, `PUT …/uploads/:id/parts/:n`, `POST …/uploads/:id/complete`, `DELETE …/uploads/:id` | Multipart upload |
-| `GET …/files/text?n=` | A revision's extracted text |
-| `POST …/files/restore` | Restore revision `n` |
-| `POST …/files/visibility` | Set public, private or password |
-| `POST …/files/import`, `POST …/files/source` | WordPress import (Admins) |
-| `GET /_emdash/api/document-revisions/me` | Caller's capabilities |
-| `GET\|POST …/document-revisions/settings` | Site settings (Admins) |
-| `GET …/document-revisions/columns?ids=` | List-column data |
-| `GET\|POST\|DELETE …/document-revisions/feed-key`, `POST …/revoke-feed-keys` | Feed keys |
-| `GET …/document-revisions/storage`, `POST …/purge-orphans`, `POST …/purge-all` | Storage maintenance (Admins) |
+Document files and revision logs live in the `DOCUMENTS` R2 bucket, not in EmDash's database, so **EmDash's export and database backups don't include them.** Back the bucket up separately, for example with [rclone](https://developers.cloudflare.com/r2/examples/rclone/) over R2's S3 API. A full restore needs both the database (entries, titles, owners) and the bucket (files and logs).
 
-Per-document endpoints accept `content:read` / `content:write` API tokens. Site-wide ones need `admin`-scoped tokens.
+## Costs
 
-## Platform constraints
+Everything runs within your own Cloudflare account; there's no service to sign up for. R2, Queues, the rate limiter and D1 all have free allowances that a small document library is unlikely to exceed. Costs that can grow with use:
+- **R2 storage.** Every revision is kept, so storage grows with each upload. Document settings shows current usage.
+- **Workers AI**, if you bind `AI` for PDF and Office extraction. It's billed per use; leave it unbound to avoid it.
+- **CPU on Workers Free.** Password checks and large uploads use CPU time; see `DOCUMENT_PASSWORD_ITERATIONS`.
 
-These are how EmDash 1.1 shapes the design. [docs/upstream-requests.md](docs/upstream-requests.md) drafts the EmDash changes that would remove the workarounds.
+Check Cloudflare's current [Workers](https://developers.cloudflare.com/workers/platform/pricing/), [R2](https://developers.cloudflare.com/r2/pricing/) and [Workers AI](https://developers.cloudflare.com/workers-ai/platform/pricing/) pricing for your plan.
 
-1. **The media library is public by key.** `GET /_emdash/api/media/file/:key` serves any key in the media bucket without auth, and plugins can't hook it. That's why documents live in their own bucket, and why EmDash's `file` field type isn't used.
-2. **Plugin routes can't do this job.** There are three reasons:
-   - private plugin routes require the `X-EmDash-Request: 1` header even on GET, so a plain `<a href>` gets a 403, and public plugin routes see no user;
-   - plugin bodies are buffered and capped at 8 MiB;
-   - plugin contexts can't read EmDash's edit lock.
+## Upgrading
 
-   So the package injects ordinary Astro routes:
-   - **The permalink** is a site route, where EmDash's soft-auth middleware identifies the user.
-   - **The per-document API** lives under EmDash's `/_emdash/api/content/` namespace. There, EmDash authenticates every request, requires the CSRF header on cookie writes, and maps token scopes by path.
-   - **Site-wide actions** sit outside that namespace, where EmDash fails closed to the `admin` scope.
-3. **Anonymous requests get no content handlers.** EmDash's anonymous fast path carries no database, to keep public pages fast. Anonymous permalinks resolve through `getEmDashEntry()`, which only returns published entries, and that's all an anonymous visitor may see anyway.
-4. **Private titles.** Visibility lives in the plugin's private manifest, so a password hash can never leak through EmDash's content APIs, and EmDash has no per-entry read policy. So:
-   - **Search:** the plugin injects an Astro middleware (`order: "post"`, after EmDash's own). It removes, from EmDash's public search and suggestion responses, every document the viewer couldn't open. Visitors find public documents, and authors and editors find the restricted ones they may open.
-   - **Template listings:** in-process queries such as `getEmDashCollection("documents")` can't be intercepted, so templates that list documents must filter them (see [install step 5](#install-into-an-emdash-site)).
-   - **Sitemaps** aren't affected: EmDash only builds them for collections with SEO enabled.
-5. **The lock check calls EmDash's lock route internally.** EmDash exposes no lock API to plugins, so the plugin calls the handler behind `GET /_emdash/api/content/:collection/:id/lock` in-process, as the caller, using an internal package export. EmDash itself then decides whether locking is on, whether the lease has expired and who holds it. If a future EmDash moves that route, writes **fail closed** with a 503.
-6. **Native plugins never get `plugin:uninstall`.** EmDash only runs it for marketplace installs. The Document settings page covers cleanup instead.
-7. **Permissions are fixed.** EmDash's roles are fixed, and plugins can't define new permissions. WordPress capabilities like `read_private_documents` become rules in [`access.ts`](plugin/src/access.ts).
-8. **Revision feeds need plugin context.** Feed readers send no session, and anonymous site requests have no database. So the feed's permission check runs in a public plugin route (`feed-data`) called in-process, and the site route renders the Atom, because plugin raw responses can't serve XML.
-9. **Feed keys and disabled users.** EmDash's plugin user API doesn't say whether an account is disabled. So the feed route reads `users.disabled` from the site's D1 binding (`DOCUMENT_D1_BINDING`, default `DB`), and refuses the feed if it can't tell. Revoking keys at offboarding is still good hygiene; Document settings can revoke everyone's.
-10. **Password hashing is sized for Workers Free.** WebCrypto counts toward the Worker's CPU budget (about 10 ms on Free). These are shared access codes, not account passwords (WordPress stores post passwords in plaintext). Raise the cost on Workers Paid with `DOCUMENT_PASSWORD_ITERATIONS`. Existing hashes keep their own count.
-11. **Native plugin code doesn't hot-reload** under `astro dev`, because EmDash loads it once. When the package is a linked checkout (as in this workspace), its integration watches its own source and restarts the dev server on changes, which takes about two seconds.
+To keep its security model, the plugin uses two EmDash internals that plugins aren't normally given: the edit-lock check and in-process calls to its own public route. Both are drafted as proper plugin APIs in [docs/upstream-requests.md](docs/upstream-requests.md). Until EmDash adopts them, an EmDash upgrade could break them. If it does, the plugin fails closed: uploads, restores and visibility changes are refused (503), and feeds stop. Nothing is exposed. So:
+- pin your `emdash` version, and upgrade EmDash and this plugin together;
+- after upgrading, upload a test revision before relying on it.
 
-### Why a native plugin, not a sandboxed one
+## Uninstalling
 
-EmDash can run plugins in a sandbox: an isolated Worker that reaches the outside only through capabilities it declares, installable in one click from EmDash's registry. This plugin can't work that way today. A sandboxed plugin:
-- has no private file storage: only EmDash's media library, which serves every file publicly by key;
-- can't add site routes, so there are no plain-link downloads (private plugin routes need a CSRF header even on GET, and public ones don't know the visitor);
-- is limited to 8 MiB bodies;
-- can't render front-end blocks;
-- can't read EmDash's edit lock or use Queues, rate limiting or Workers AI.
+EmDash doesn't run uninstall hooks for native plugins, so clean up by hand:
+1. On **Document settings**, use **Delete all document files**. It deletes every file, revision log and feed key; only the plugin's small settings file is left.
+2. Remove `documentRevisions()` and `documentRevisionsRoutes()` from `astro.config.mjs`, and the bindings from `wrangler.jsonc`. Redeploy.
+3. Optionally delete the bucket (R2 only deletes empty buckets, so remove the leftover settings file first, e.g. in the Cloudflare dashboard), the queue, and the `documents` collection and its entries in EmDash.
 
-Moving only the declarative parts (hooks, settings, a Block Kit panel) into a sandbox would still need a trusted companion package for storage, permalinks and blocks, which keeps the security cost of native code.
+## Limitations
 
-| | Native (this plugin) | Sandboxed |
-|---|---|---|
-| Private storage, streaming, 5 GB uploads, permalinks, blocks | ✓ | ✗ |
-| Install | npm + `astro.config` + redeploy | One click from the registry |
-| Trust | Full access to the site, its database and secrets | Isolated; declared capabilities need the site owner's consent |
-| EmDash upgrades | Reads some EmDash internals (see constraints 5 and 8) | Stable plugin API only |
-| Plan | Any Workers plan | Workers Paid (Worker Loader) |
+The main differences from WP Document Revisions, and from what you might expect of a one-click plugin:
+- **Cloudflare only** for now; no Node or self-hosted EmDash.
+- **Native, not sandboxed.** It runs with full access to your site, as every native EmDash plugin does, so install it only from a source you trust.
+- **Template listings need a filter** (install step 5). EmDash has no per-entry read rules, so the plugin can't hide private documents from your own queries.
+- **Fixed roles.** EmDash's five roles can't be extended, so there's no `read_private_documents`-style custom capability.
+- **No email yet:** no notifications on new revisions, and no email when someone takes over a lock.
+- **No permalink base setting** yet; documents live under `/documents/`.
 
-So install it only from a source you trust, as with any native EmDash plugin. The EmDash changes that would make a sandboxed version possible are drafted in [docs/upstream-requests.md](docs/upstream-requests.md#6-what-a-sandboxed-version-would-need).
-
-### Running outside Cloudflare
-
-EmDash itself runs on Node (SQLite or Postgres, local or S3 storage). This plugin doesn't yet, because it uses Cloudflare bindings directly:
-- the R2 bucket, through `cloudflare:workers`, including conditional writes and multipart uploads;
-- `FixedLengthStream`;
-- Queues;
-- the rate limiter.
-
-A Node version needs:
-- a storage interface with R2, S3 and local-disk implementations;
-- an in-process queue fallback;
-- an in-memory rate limiter.
-
-It's on the [roadmap](ROADMAP.md#migration-and-quality).
+[docs/architecture.md](docs/architecture.md) explains each of these, the plugin's internals and its API.
 
 ## Testing
 

@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-A port of [WP Document Revisions](https://github.com/wp-document-revisions/wp-document-revisions) to [EmDash](https://github.com/emdash-cms/emdash) on Cloudflare Workers: versioned files in a private R2 bucket, served through permission-checked permalinks. The [README](README.md) is the source of truth for behavior, the permission matrix, the API table and the platform constraints; read its "Platform constraints" section before changing how routing, storage or access works, since most odd-looking design choices are explained there.
+A port of [WP Document Revisions](https://github.com/wp-document-revisions/wp-document-revisions) to [EmDash](https://github.com/emdash-cms/emdash) on Cloudflare Workers: versioned files in a private R2 bucket, served through permission-checked permalinks. The [README](README.md) is the source of truth for user-facing behavior and the permission matrix; [docs/architecture.md](docs/architecture.md) holds the code layout, the API table and the platform constraints. Read its "Platform constraints" section before changing how routing, storage or access works, since most odd-looking design choices are explained there.
 
 ## Layout
 
@@ -56,5 +56,5 @@ WordPress import: [`scripts/wpdr-export.php`](scripts/wpdr-export.php) runs on t
 ## Conventions
 
 - `DOCUMENTS` must never be the EmDash media bucket: EmDash serves every media-bucket key publicly.
-- Where a workaround exists only because of an EmDash limitation, record the upstream change that would remove it in [`docs/upstream-requests.md`](docs/upstream-requests.md), and keep the README's platform constraints in sync.
+- Where a workaround exists only because of an EmDash limitation, record the upstream change that would remove it in [`docs/upstream-requests.md`](docs/upstream-requests.md), and keep the platform constraints in [docs/architecture.md](docs/architecture.md) in sync.
 - Add verify checks for new behavior, and run `pnpm typecheck` plus `scripts/verify.sh` before a PR. Planned work and estimates are in [`ROADMAP.md`](ROADMAP.md).

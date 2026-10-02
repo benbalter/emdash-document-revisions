@@ -16,7 +16,7 @@ This covers what's left between this port and [WP Document Revisions](https://gi
 - admin list columns;
 - front-end blocks (Document list, Latest documents, Document revisions, Document preview).
 
-See the README's [parity table](README.md#parity-with-wp-document-revisions) and [platform constraints](README.md#platform-constraints). The EmDash changes that would remove workarounds are drafted in [docs/upstream-requests.md](docs/upstream-requests.md).
+See the README's [parity table](README.md#parity-with-wp-document-revisions) and [platform constraints](docs/architecture.md#platform-constraints). The EmDash changes that would remove workarounds are drafted in [docs/upstream-requests.md](docs/upstream-requests.md).
 
 ## Parity audit: remaining gaps
 

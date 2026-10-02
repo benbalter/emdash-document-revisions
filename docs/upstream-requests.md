@@ -13,7 +13,7 @@ These are drafts of issues for [emdash-cms/emdash](https://github.com/emdash-cms
 - `handleEntryLockRead` on `locals.emdash`, like the other content handlers; or
 - an exported `assertEntryWritable(db, collection, id, userId)` that wraps the existing refusal logic.
 
-**Workaround today.** A direct table read that fails closed with a 503 if the query errors ([`access.ts`](../plugin/src/access.ts)).
+**Workaround today.** The plugin calls core's own lock route handler in-process, as the caller, through an internal package export (`emdash/internal/routes/api/content/_collection_/_id_/lock`). Core still decides who holds the lock, but the import path is internal, so writes fail closed with a 503 if it moves ([`access.ts`](../plugin/src/access.ts)).
 
 ---
 
@@ -46,7 +46,7 @@ These are drafts of issues for [emdash-cms/emdash](https://github.com/emdash-cms
 
 **Ask.** A read-side hook, such as `content:filterPublic(entries) → entries`, applied by the public search, suggest, live-collection and sitemap paths, gated by a capability like `hooks.content-visibility:register`. Or a core `visibility` column, which would also benefit sites without this plugin.
 
-**Workaround today.** Search is turned off for the collection, and site templates filter listings through a helper.
+**Workaround today.** An Astro middleware that runs after EmDash's removes restricted documents from `/_emdash/api/search` and `/search/suggest` responses ([`middleware.ts`](../plugin/src/middleware.ts)), and site templates filter listings through a helper. In-process queries such as `getEmDashCollection()` stay unfiltered.
 
 ---
 
