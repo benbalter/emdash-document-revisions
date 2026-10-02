@@ -164,7 +164,18 @@ ${entries}
 	});
 }
 
-export const GET: APIRoute = async ({ params, locals, cookies, request, url }) => {
+/**
+ * Keep everything but a public file out of Astro's route cache, which
+ * ignores Cache-Control: a site's routeRules covering /documents/** must not
+ * store a private file, a password form or a feed and serve it to others.
+ */
+export const GET: APIRoute = async (context) => {
+	const res = await serve(context);
+	if (!res.headers.get("cache-control")?.startsWith("public")) context.cache?.set(false);
+	return res;
+};
+
+const serve: APIRoute = async ({ params, locals, cookies, request, url }) => {
 	const parts = (params.path ?? "").split("/").filter(Boolean);
 	if (parts.length === 2 && parts[1] === "feed") {
 		const slug = safeDecode(parts[0]!);
@@ -192,7 +203,9 @@ export const GET: APIRoute = async ({ params, locals, cookies, request, url }) =
 		"Content-Type": r.revision.contentType,
 		"Content-Disposition": contentDisposition(r.revision.filename, r.revision.contentType),
 		"X-Content-Type-Options": "nosniff",
-		"Cache-Control": isPublic ? "public, max-age=60" : "private, no-store",
+		// no-cache: revalidate every time (a cheap 304), so making a document
+		// private or trashing it takes effect at once.
+		"Cache-Control": isPublic ? "public, no-cache" : "private, no-store",
 		"Accept-Ranges": "bytes",
 		ETag: head.httpEtag,
 	};
@@ -245,7 +258,8 @@ async function passwordAttemptAllowed(request: Request, entryId: string): Promis
 }
 
 /** Password form submission. */
-export const POST: APIRoute = async ({ params, locals, request, url }) => {
+export const POST: APIRoute = async ({ params, locals, request, url, cache }) => {
+	cache?.set(false);
 	// Non-/_emdash routes get no CSRF check from EmDash; refuse cross-site posts.
 	const origin = request.headers.get("origin");
 	if (origin && origin !== url.origin) return new Response("Forbidden", { status: 403 });
