@@ -1,3 +1,3 @@
-import { devServerSetup } from "../support/dev-server";
+import { devServerSetup, testPort } from "../support/dev-server";
 
-export default devServerSetup({ port: 4330, stateName: ".wrangler-test/integration" });
+export default devServerSetup({ port: testPort(0), stateName: ".wrangler-test/integration" });

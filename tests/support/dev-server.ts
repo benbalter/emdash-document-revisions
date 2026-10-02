@@ -23,6 +23,13 @@ import { D1, type TestUser, TEST_USERS } from "./db";
 
 export const SITE_DIR = resolve(import.meta.dirname, "../../site");
 
+/**
+ * Ports for the suites' dev servers: integration on the base port, import on
+ * the next. Set EDR_TEST_PORT to move both, e.g. when another checkout or
+ * worktree is running the tests at the same time.
+ */
+export const testPort = (offset: 0 | 1): number => (Number(process.env.EDR_TEST_PORT) || 4330) + offset;
+
 export interface DevServerOptions {
 	port: number;
 	/** Directory under site/ for this suite's Miniflare state. */
