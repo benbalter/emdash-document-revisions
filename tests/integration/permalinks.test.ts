@@ -185,3 +185,11 @@ describe("Range and conditional requests", () => {
 		expect((await anon().get(url, { headers: { Range: "bytes=0-9" } })).status).toBe(404);
 	});
 });
+
+describe("Malformed permalinks", () => {
+	it("a stray percent-escape is a 404, not a server error", async () => {
+		expect((await anon().get("/documents/%E0%A4%A")).status).toBe(404);
+		expect((await anon().get("/documents/100%.pdf")).status).toBe(404);
+		expect((await anon().get("/documents/100%/feed?key=wrongwrongwrongwrongwrong")).status).toBe(404);
+	});
+});

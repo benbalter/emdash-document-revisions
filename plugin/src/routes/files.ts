@@ -27,6 +27,7 @@ import { handle, HttpError, ok, readJson, requireEntry, requireUser, requireWrit
 import {
 	bucket,
 	COLLECTION,
+	normalizeContentType,
 	permalink,
 	readManifest,
 	revisionObjectKey,
@@ -157,8 +158,7 @@ async function upload(locals: App.Locals, request: Request, url: URL, entryId: s
 	if (size > MAX_UPLOAD_BYTES) {
 		throw new HttpError(413, "PAYLOAD_TOO_LARGE", `Files are limited to ${MAX_UPLOAD_BYTES / 1024 / 1024} MB`);
 	}
-	const contentType =
-		request.headers.get("content-type")?.split(";")[0]?.trim() || "application/octet-stream";
+	const contentType = normalizeContentType(request.headers.get("content-type"));
 
 	const b = await bucket();
 	// Write the object before the manifest: an orphaned object is harmless,
@@ -229,8 +229,7 @@ async function multipartCreate(locals: App.Locals, request: Request, entryId: st
 	if (Number.isFinite(size) && size > (await maxFileBytes())) {
 		throw new HttpError(413, "PAYLOAD_TOO_LARGE", `Files are limited to ${Math.round((await maxFileBytes()) / 1024 ** 3)} GB`);
 	}
-	const contentType =
-		typeof body.contentType === "string" && body.contentType ? body.contentType.split(";")[0]!.trim() : "application/octet-stream";
+	const contentType = normalizeContentType(body.contentType);
 	const key = revisionObjectKey(entry.id);
 	const mpu = await (await bucket()).createMultipartUpload(key, { httpMetadata: { contentType } });
 	return { uploadId: mpu.uploadId, key, partBytes: PART_BYTES, maxFileBytes: await maxFileBytes() };
@@ -383,7 +382,7 @@ async function importRevision(locals: App.Locals, request: Request, url: URL, en
 		if (size > MAX_UPLOAD_BYTES) {
 			throw new HttpError(413, "PAYLOAD_TOO_LARGE", `Files are limited to ${MAX_UPLOAD_BYTES / 1024 / 1024} MB`);
 		}
-		contentType = request.headers.get("content-type")?.split(";")[0]?.trim() || "application/octet-stream";
+		contentType = normalizeContentType(request.headers.get("content-type"));
 		key = revisionObjectKey(entry.id);
 		await b.put(key, request.body.pipeThrough(new FixedLengthStream(size)), { httpMetadata: { contentType } });
 	}

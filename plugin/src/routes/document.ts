@@ -17,6 +17,7 @@
 import type { APIRoute, AstroCookies } from "astro";
 
 import {
+	accountActive,
 	fileAccess,
 	getEntry,
 	getPublishedEntry,
@@ -26,7 +27,7 @@ import {
 	verifyPassword,
 	type Entry,
 } from "../access";
-import { candidates, etagMatches, fileSegment, parseRange } from "../permalinks";
+import { candidates, etagMatches, fileSegment, parseRange, safeDecode } from "../permalinks";
 import {
 	bucket,
 	contentDisposition,
@@ -48,10 +49,11 @@ interface Resolved {
 }
 
 async function resolve(locals: App.Locals, path: string): Promise<Resolved | null> {
-	const segment = fileSegment(path);
+	const raw = fileSegment(path);
+	const segment = raw === null ? null : safeDecode(raw);
 	if (!segment) return null;
 	const b = await bucket();
-	for (const { slug, n } of candidates(decodeURIComponent(segment))) {
+	for (const { slug, n } of candidates(segment)) {
 		const entryId = await entryIdForSlug(b, slug);
 		if (!entryId) continue;
 		const entry = locals.user
@@ -163,27 +165,6 @@ ${entries}
 }
 
 /**
- * Whether a user account is enabled, read from EmDash's `users` table through
- * the site's D1 binding (`DB`, or the name in DOCUMENT_D1_BINDING). Anonymous
- * requests have no database on locals, and EmDash's plugin user API omits the
- * disabled flag. Fails closed: no binding or a failed query counts as disabled.
- */
-async function accountActive(userId: string): Promise<boolean> {
-	try {
-		const { env } = await import("cloudflare:workers");
-		const vars = env as Record<string, unknown>;
-		const name = typeof vars.DOCUMENT_D1_BINDING === "string" ? vars.DOCUMENT_D1_BINDING : "DB";
-		const db = vars[name] as D1Database | undefined;
-		if (!db) throw new Error(`No D1 binding named ${name}`);
-		const row = await db.prepare("SELECT disabled FROM users WHERE id = ?").bind(userId).first<{ disabled: number }>();
-		return row !== null && !row.disabled;
-	} catch (e) {
-		console.error("[document-revisions] can't check whether a feed key's account is disabled", e);
-		return false;
-	}
-}
-
-/**
  * Keep everything but a public file out of Astro's route cache, which
  * ignores Cache-Control: a site's routeRules covering /documents/** must not
  * store a private file, a password form or a feed and serve it to others.
@@ -196,7 +177,10 @@ export const GET: APIRoute = async (context) => {
 
 const serve: APIRoute = async ({ params, locals, cookies, request, url }) => {
 	const parts = (params.path ?? "").split("/").filter(Boolean);
-	if (parts.length === 2 && parts[1] === "feed") return feed(locals, url, decodeURIComponent(parts[0]!));
+	if (parts.length === 2 && parts[1] === "feed") {
+		const slug = safeDecode(parts[0]!);
+		return slug ? feed(locals, url, slug) : notFound();
+	}
 	const r = await resolve(locals, params.path ?? "");
 	if (!r) return notFound();
 

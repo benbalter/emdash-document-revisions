@@ -291,6 +291,19 @@ export function permalink(slug: string, revision: RevisionRecord, n: number | nu
 	return `/documents/${encodeURIComponent(slug)}${suffix}${extensionOf(revision.filename)}`;
 }
 
+/**
+ * A client-supplied MIME type, reduced to `type/subtype` and lowercased, or
+ * application/octet-stream if it isn't one. It's stored and later sent back
+ * as the permalink's Content-Type, where anything else (control characters,
+ * parameters) would make the response throw or carry stray header text.
+ */
+export function normalizeContentType(raw: unknown): string {
+	const type = typeof raw === "string" ? raw.split(";")[0]!.trim().toLowerCase() : "";
+	return /^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$/.test(type)
+		? type
+		: "application/octet-stream";
+}
+
 /** Types safe to render inline; everything else downloads, as core media does. */
 const INLINE_TYPES = new Set([
 	"application/pdf",
