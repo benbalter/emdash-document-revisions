@@ -210,9 +210,12 @@ describe("Password rate limit", () => {
 		await makeDocument(SLUG, { visibility: "password", password: "rl-secret" });
 	});
 
-	it("sixth wrong password in a minute is throttled", async () => {
+	// The limiter (5 per 60s) counts in fixed windows aligned to the clock, so
+	// a run that straddles a window boundary starts counting again. Within two
+	// windows, at most 10 guesses get through before one is refused.
+	it("guesses past the limit are throttled", async () => {
 		const codes: number[] = [];
-		for (let i = 0; i < 6; i++) {
+		for (let i = 0; i < 11 && !codes.includes(429); i++) {
 			const res = await anon().fetch(`/documents/${SLUG}`, {
 				method: "POST",
 				body: new URLSearchParams({ password: "wrong" }),
@@ -220,7 +223,10 @@ describe("Password rate limit", () => {
 			codes.push(res.status);
 			if (res.status === 429) expect(res.headers.get("retry-after")).toBe("60");
 		}
-		expect(codes).toEqual([401, 401, 401, 401, 401, 429]);
+		const refused = codes.indexOf(429);
+		expect(refused, `statuses: ${codes.join(", ")}`).toBeGreaterThanOrEqual(5);
+		expect(refused).toBeLessThanOrEqual(10);
+		expect(codes.slice(0, refused).every((c) => c === 401)).toBe(true);
 	});
 });
 
