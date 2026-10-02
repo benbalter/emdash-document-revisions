@@ -97,7 +97,7 @@ Until it's on npm, add the package from a local checkout, e.g. `pnpm add ../emda
 
 ### Deploy to Cloudflare
 
-Create the resources your `wrangler.jsonc` names, then deploy as usual for EmDash. With the demo site's names:
+Create the resources your `wrangler.jsonc` names, then deploy as usual for EmDash. These steps haven't yet been run against a real deployment (see the status note above); please report anything that differs. With the demo site's names:
 
 ```sh
 npx wrangler r2 bucket create my-emdash-documents
@@ -237,7 +237,13 @@ Check Cloudflare's current [Workers](https://developers.cloudflare.com/workers/p
 
 ## Upgrading
 
-To keep its security model, the plugin uses two EmDash internals that plugins aren't normally given: the edit-lock check and in-process calls to its own public route. Both are drafted as proper plugin APIs in [docs/upstream-requests.md](docs/upstream-requests.md). Until EmDash adopts them, an EmDash upgrade could break them. If it does, the plugin fails closed: uploads, restores and visibility changes are refused (503), and feeds stop. Nothing is exposed. So:
+To keep its security model, the plugin relies on a few EmDash details that aren't part of the plugin API:
+- **the edit-lock check**, called through an internal package export;
+- **the public plugin route handler**, called in-process to authorize revision feeds;
+- **the `users.disabled` column** in EmDash's D1 database, read to refuse feed keys of disabled accounts;
+- **the shape of EmDash's search responses**, which the plugin filters.
+
+Plugin APIs that would replace the lock check and the search filter are drafted in [docs/upstream-requests.md](docs/upstream-requests.md). An EmDash upgrade could break any of them, and if one does, the plugin fails closed: uploads, restores and visibility changes are refused (503), feeds stop working, and search returns no results. Nothing private is exposed. So:
 - pin your `emdash` version, and upgrade EmDash and this plugin together;
 - after upgrading, upload a test revision before relying on it.
 

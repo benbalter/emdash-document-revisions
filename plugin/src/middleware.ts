@@ -16,12 +16,19 @@ const SEARCH_PATHS = new Set(["/_emdash/api/search", "/_emdash/api/search/sugges
 
 export const onRequest = defineMiddleware(async (context, next) => {
 	const response = await next();
-	if (!SEARCH_PATHS.has(context.url.pathname) || context.request.method !== "GET" || !response.ok) return response;
+	const path = context.url.pathname.replace(/\/+$/, "");
+	if (!SEARCH_PATHS.has(path) || !response.ok) return response;
 	const body = (await response.clone().json().catch(() => null)) as
 		| { success?: boolean; data?: { items?: Array<Record<string, unknown>> } }
 		| null;
 	const items = body?.data?.items;
-	if (!Array.isArray(items) || !items.some((i) => i.collection === COLLECTION)) return response;
+	// Fail closed: if EmDash changes this response's shape, we can't tell which
+	// hits are documents, so return no results rather than risk leaking titles.
+	if (!Array.isArray(items) || !items.every((i) => typeof i?.collection === "string" && i.id != null)) {
+		console.error("[document-revisions] unrecognized search response; returning no results");
+		return Response.json({ success: true, data: { items: [] } }, { status: 200, headers: { "Cache-Control": "private, no-store" } });
+	}
+	if (!items.some((i) => i.collection === COLLECTION)) return response;
 
 	const user = context.locals.user;
 	const b = await bucket();

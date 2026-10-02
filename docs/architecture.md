@@ -56,7 +56,7 @@ These are how EmDash 1.1 shapes the design. [upstream-requests.md](upstream-requ
    - **Site-wide actions** sit outside that namespace, where EmDash fails closed to the `admin` scope.
 3. **Anonymous requests get no content handlers.** EmDash's anonymous fast path carries no database, to keep public pages fast. Anonymous permalinks resolve through `getEmDashEntry()`, which only returns published entries, and that's all an anonymous visitor may see anyway.
 4. **Private titles.** Visibility lives in the plugin's private manifest, so a password hash can never leak through EmDash's content APIs, and EmDash has no per-entry read policy. So:
-   - **Search:** the plugin injects an Astro middleware (`order: "post"`, after EmDash's own). It removes, from EmDash's public search and suggestion responses, every document the viewer couldn't open. Visitors find public documents, and authors and editors find the restricted ones they may open.
+   - **Search:** the plugin injects an Astro middleware (`order: "post"`, after EmDash's own). It removes, from EmDash's public search and suggestion responses, every document the viewer couldn't open. Visitors find public documents, and authors and editors find the restricted ones they may open. If EmDash changes the response shape so documents can't be recognized, the filter returns no results rather than pass them through.
    - **Template listings:** in-process queries such as `getEmDashCollection("documents")` can't be intercepted, so templates that list documents must filter them (see [install step 5](../README.md#install-into-an-emdash-site)).
    - **Sitemaps** aren't affected: EmDash only builds them for collections with SEO enabled.
 5. **The lock check calls EmDash's lock route internally.** EmDash exposes no lock API to plugins, so the plugin calls the handler behind `GET /_emdash/api/content/:collection/:id/lock` in-process, as the caller, using an internal package export. EmDash itself then decides whether locking is on, whether the lease has expired and who holds it. If a future EmDash moves that route, writes **fail closed** with a 503.
@@ -83,7 +83,7 @@ Moving only the declarative parts (hooks, settings, a Block Kit panel) into a sa
 | Private storage, streaming, 5 GB uploads, permalinks, blocks | ✓ | ✗ |
 | Install | npm + `astro.config` + redeploy | One click from the registry |
 | Trust | Full access to the site, its database and secrets | Isolated; declared capabilities need the site owner's consent |
-| EmDash upgrades | Reads some EmDash internals (see constraints 5 and 8) | Stable plugin API only |
+| EmDash upgrades | Relies on some EmDash internals (see constraints 4, 5, 8 and 9) | Stable plugin API only |
 | Plan | Any Workers plan | Workers Paid (Worker Loader) |
 
 So install it only from a source you trust, as with any native EmDash plugin. The EmDash changes that would make a sandboxed version possible are drafted in [upstream-requests.md](upstream-requests.md#6-what-a-sandboxed-version-would-need).
