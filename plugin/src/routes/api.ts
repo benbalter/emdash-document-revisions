@@ -65,7 +65,7 @@ async function orphanIds(locals: App.Locals, ids: string[]): Promise<string[]> {
 		// database error, a timeout) must abort the purge, which deletes files
 		// permanently, rather than count a live document as gone.
 		if (res.error?.code !== "NOT_FOUND") {
-			throw new HttpError(503, "CHECK_FAILED", `Couldn't check document ${id}; nothing was deleted`);
+			throw new HttpError(503, "CHECK_FAILED", `Couldn't check whether document ${id} still exists; try again`);
 		}
 		orphans.push(id);
 	}
