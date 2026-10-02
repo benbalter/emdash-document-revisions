@@ -1,0 +1,76 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  # The importer suite downloads the latest WordPress and WP Document
+  # Revisions through Playground, so run it nightly to catch upstream drift.
+  schedule:
+    - cron: "17 6 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Typecheck, unit and integration
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4 # version from package.json "packageManager"
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - name: Unit tests (Workers runtime)
+        run: pnpm test:unit
+      - name: Integration tests (astro dev on Miniflare)
+        run: pnpm test:integration
+
+  import:
+    name: WordPress importer
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      # On pushes and pull requests, only when the importer or its tests change.
+      - name: Check for importer changes
+        id: changes
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [[ "$EVENT" == schedule || "$EVENT" == workflow_dispatch ]] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "run=true" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git diff --name-only "$BASE" "$GITHUB_SHA" |
+            grep -qE '^(scripts/(wpdr-export\.php|import-wpdr\.mjs|fixtures/)|plugin/src/routes/files\.ts|plugin/src/store\.ts|tests/import/|tests/support/|vitest\.config\.ts|pnpm-lock\.yaml|\.github/workflows/test\.yml)'; then
+            echo "run=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "run=false" >>"$GITHUB_OUTPUT"
+            echo "No importer changes; skipping."
+          fi
+      - if: steps.changes.outputs.run == 'true'
+        uses: pnpm/action-setup@v4
+      - if: steps.changes.outputs.run == 'true'
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+      - if: steps.changes.outputs.run == 'true'
+        run: pnpm install --frozen-lockfile
+      - if: steps.changes.outputs.run == 'true'
+        name: Importer tests (WordPress Playground)
+        run: pnpm test:import

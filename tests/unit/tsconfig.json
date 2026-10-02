@@ -1,0 +1,14 @@
+{
+  // The unit suite runs in the Workers runtime (workerd).
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "types": ["@cloudflare/workers-types", "@cloudflare/vitest-plugin/types"]
+  },
+  "include": ["**/*"]
+}

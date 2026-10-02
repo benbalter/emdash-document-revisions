@@ -1,0 +1,14 @@
+{
+  // Node-side test code: integration and import suites, their helpers, and
+  // the Vitest config. The unit suite runs in workerd and has its own config.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["support/**/*", "integration/**/*", "import/**/*", "../vitest.config.ts"]
+}

@@ -5,6 +5,8 @@ dist
 uploads
 data.db
 .wrangler
+# Local state of the dev servers the test suites start.
+.wrangler-test
 
 # Environment / Wrangler secrets
 .env

@@ -7,7 +7,12 @@ import { documentRevisions, documentRevisionsRoutes } from "emdash-document-revi
 
 export default defineConfig({
 	output: "server",
-	adapter: cloudflare(),
+	// The integration tests run their own dev server with its own local state
+	// (D1, R2, queues), so `pnpm test` never touches the data under
+	// .wrangler/ that `pnpm dev` uses.
+	adapter: cloudflare(
+		process.env.EDR_STATE_DIR ? { persistState: { path: process.env.EDR_STATE_DIR } } : {},
+	),
 	image: {
 		layout: "constrained",
 		responsiveStyles: true,
