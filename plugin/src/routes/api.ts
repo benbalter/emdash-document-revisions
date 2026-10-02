@@ -60,7 +60,14 @@ async function orphanIds(locals: App.Locals, ids: string[]): Promise<string[]> {
 	const orphans: string[] = [];
 	for (const id of ids) {
 		const res = await get(COLLECTION, id);
-		if (!res.success) orphans.push(id);
+		if (res.success) continue;
+		// Only a definite "no such entry" makes an orphan. Anything else (a
+		// database error, a timeout) must abort the purge, which deletes files
+		// permanently, rather than count a live document as gone.
+		if (res.error?.code !== "NOT_FOUND") {
+			throw new HttpError(503, "CHECK_FAILED", `Couldn't check document ${id}; nothing was deleted`);
+		}
+		orphans.push(id);
 	}
 	return orphans;
 }

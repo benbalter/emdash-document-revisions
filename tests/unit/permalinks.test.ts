@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { candidates, etagMatches, fileSegment, parseRange } from "../../plugin/src/permalinks";
+import { candidates, etagMatches, fileSegment, parseRange, safeDecode } from "../../plugin/src/permalinks";
 
 describe("fileSegment", () => {
 	it.each([
@@ -91,5 +91,16 @@ describe("etagMatches", () => {
 
 	it("compares weak and strong forms alike", () => {
 		expect(etagMatches('"abc"', 'W/"abc"')).toBe(true);
+	});
+});
+
+describe("safeDecode", () => {
+	it.each([
+		["tps%20report.pdf", "tps report.pdf"],
+		["plain", "plain"],
+		["%E0%A4%A", null],
+		["100%", null],
+	])("%j → %j", (raw, decoded) => {
+		expect(safeDecode(raw)).toBe(decoded);
 	});
 });

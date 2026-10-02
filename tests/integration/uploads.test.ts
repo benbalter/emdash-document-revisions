@@ -136,3 +136,30 @@ describe("Multipart uploads (past the 100 MB single-request cap)", () => {
 		expect((await as("author").post(`${CONTENT}/${otherId}/files/uploads`, {})).status).toBe(403);
 	});
 });
+
+describe("Client-supplied content types", () => {
+	const admin = as("admin");
+
+	it("a multipart content type that isn't a MIME type is stored as octet-stream", async () => {
+		const slug = uniq("verify-ctype");
+		const id = await makeDocument(slug);
+		const created = (await (
+			await admin.post(`${CONTENT}/${id}/files/uploads`, { contentType: "text/html\r\nX-Injected: 1" })
+		).json()) as { data: { uploadId: string; key: string } };
+		const up = created.data;
+		const part = await admin.fetch(
+			`${CONTENT}/${id}/files/uploads/${up.uploadId}/parts/1?key=${encodeURIComponent(up.key)}`,
+			{ method: "PUT", body: "<p>hi</p>" },
+		);
+		const done = await admin.post(`${CONTENT}/${id}/files/uploads/${up.uploadId}/complete`, {
+			key: up.key,
+			parts: [((await part.json()) as { data: unknown }).data],
+			filename: "page.html",
+		});
+		expect(done.status).toBe(201);
+		const res = await anon().get(`/documents/${slug}`);
+		expect(res.status).toBe(200);
+		expect(res.headers.get("content-type")).toBe("application/octet-stream");
+		expect(res.headers.get("x-injected")).toBeNull();
+	});
+});

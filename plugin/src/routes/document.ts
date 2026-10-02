@@ -27,7 +27,7 @@ import {
 	verifyPassword,
 	type Entry,
 } from "../access";
-import { candidates, etagMatches, fileSegment, parseRange } from "../permalinks";
+import { candidates, etagMatches, fileSegment, parseRange, safeDecode } from "../permalinks";
 import {
 	bucket,
 	contentDisposition,
@@ -49,10 +49,11 @@ interface Resolved {
 }
 
 async function resolve(locals: App.Locals, path: string): Promise<Resolved | null> {
-	const segment = fileSegment(path);
+	const raw = fileSegment(path);
+	const segment = raw === null ? null : safeDecode(raw);
 	if (!segment) return null;
 	const b = await bucket();
-	for (const { slug, n } of candidates(decodeURIComponent(segment))) {
+	for (const { slug, n } of candidates(segment)) {
 		const entryId = await entryIdForSlug(b, slug);
 		if (!entryId) continue;
 		const entry = locals.user
@@ -165,7 +166,10 @@ ${entries}
 
 export const GET: APIRoute = async ({ params, locals, cookies, request, url }) => {
 	const parts = (params.path ?? "").split("/").filter(Boolean);
-	if (parts.length === 2 && parts[1] === "feed") return feed(locals, url, decodeURIComponent(parts[0]!));
+	if (parts.length === 2 && parts[1] === "feed") {
+		const slug = safeDecode(parts[0]!);
+		return slug ? feed(locals, url, slug) : notFound();
+	}
 	const r = await resolve(locals, params.path ?? "");
 	if (!r) return notFound();
 
