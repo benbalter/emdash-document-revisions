@@ -44,14 +44,14 @@ This repository is a pnpm workspace: the plugin in [`plugin/`](plugin/), and a d
 ```sh
 pnpm install
 pnpm dev             # starts astro dev; open the dev-bypass URL it prints to sign in
-scripts/verify.sh    # end-to-end checks, in another terminal
+pnpm test            # unit and end-to-end tests; starts its own dev server
 ```
 
 To add a document, use **Upload document** in the admin sidebar, or create a Document and use the **Document revisions** panel in the editor's sidebar.
 
 **No network needed.** After `pnpm install`, local development works offline. `astro dev` runs the site in Cloudflare's own runtime (workerd, via Miniflare), and D1, R2, Queues and the rate limiter are emulated on disk under `site/.wrangler/`. No Cloudflare account or login is needed. The exceptions:
 - the blog theme's Google Fonts download once into `site/.astro/fonts` (offline with an empty cache, the site falls back to system fonts);
-- `scripts/verify-import.sh` downloads WordPress through Playground;
+- `pnpm test:import` downloads WordPress through Playground;
 - a Workers AI binding, if you add one, is remote.
 
 ## Install into an EmDash site
@@ -269,9 +269,16 @@ The main differences from WP Document Revisions, and from what you might expect 
 
 ## Testing
 
-Both suites run against a local `pnpm dev`. They change the local dev database (roles, lock rows), so never point them at a real site.
+The tests use [Vitest](https://vitest.dev) and run offline, except the importer suite. [GitHub Actions](.github/workflows/test.yml) runs them on every push and pull request.
 
-- [`scripts/verify.sh`](scripts/verify.sh) runs 151 end-to-end checks:
+- `pnpm test:unit` runs about 440 tests in Cloudflare's own runtime (workerd) with a local R2 bucket, in about a second:
+  - the access rules, as a table of every role, authorship, visibility, status and revision case, checked against the [Who can do what](#who-can-do-what) table;
+  - password hashing, including hashes from before the cost was stored, and password cookies;
+  - the store: revision-log compare-and-swap under a simulated race, default visibility, the slug index, deletes, storage usage and feed keys;
+  - text extraction and its queue consumer, including size limits, truncation and retries;
+  - permalink parsing, Range and `If-None-Match`;
+  - the search filter, including failing closed when EmDash's response looks unfamiliar.
+- `pnpm test:integration` runs about 170 end-to-end tests over HTTP against the demo site. It starts its own `astro dev` on port 4330, with its own local data under `site/.wrangler-test/`, so it never touches the data `pnpm dev` uses. Each role is a real user with its own session. The tests cover:
   - permalinks, plus Range and conditional requests;
   - public, private, password and draft access for every role;
   - cache headers;
@@ -287,19 +294,22 @@ Both suites run against a local `pnpm dev`. They change the local dev database (
   - text extraction;
   - default visibility;
   - list columns;
-  - revision feeds and keys;
+  - search results for each role;
+  - revision feeds and keys, including disabled accounts;
   - storage cleanup;
   - the front-end blocks, as a visitor, a subscriber and an admin.
-- [`scripts/verify-import.sh`](scripts/verify-import.sh) runs 36 checks:
+- `pnpm test:import` runs 36 tests of the [WordPress importer](#import-from-wordpress) on port 4331. It needs network, and isn't part of `pnpm test`; CI runs it nightly and whenever the importer changes.
   - It seeds a real WordPress with the released WP Document Revisions in [Playground](https://wordpress.org/playground/), using a document directory outside the web root.
   - It exports, imports twice, and checks files, revision numbers, authors, notes, visibility, status, workflow states, oversize handling and idempotency.
-- `pnpm typecheck` type-checks the plugin.
+- `pnpm test` runs the unit and integration suites; `pnpm typecheck` type-checks the plugin and the tests.
+
+Run one file with `pnpm vitest run tests/integration/feeds.test.ts`, or one test with `-t "feed with the key"`. Set `EDR_DEV_LOG=1` to see the dev server's output. The suites write straight to their own dev server's database (roles, lock rows), so never point them at a real site.
 
 ## Contributing
 
 Issues and pull requests are welcome. Before opening a PR:
-- run `pnpm typecheck` and `scripts/verify.sh`, and `scripts/verify-import.sh` if you touched the importer;
-- add checks for new behavior.
+- run `pnpm typecheck` and `pnpm test`, and `pnpm test:import` if you touched the importer;
+- add tests for new behavior.
 
 Explain *why* in commit messages and PR descriptions. [ROADMAP.md](ROADMAP.md) lists what's planned, with estimates.
 

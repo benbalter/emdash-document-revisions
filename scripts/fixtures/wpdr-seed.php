@@ -1,7 +1,7 @@
 <?php
 /**
  * Seeds WP Document Revisions in a WordPress Playground with documents that
- * cover what the importer has to carry over. Used by scripts/verify-import.sh.
+ * cover what the importer has to carry over. Used by tests/import/import.test.ts.
  *
  * Slugs get a per-run suffix (/fixtures/run.txt) so repeated runs don't
  * collide on the EmDash side.
@@ -129,7 +129,7 @@ $add_file( $t, 'memo.txt', "Memo\n", 'Memo', 1 );
 $finish( $t, 'publish', "memo-$run" );
 wp_trash_post( $t );
 
-// Self-check, read by verify-import.sh: files really are outside uploads.
+// Self-check, read by tests/import/import.test.ts: files really are outside uploads.
 $sample = get_attached_file( (int) get_post_meta( $h, '_document_attachment_id', true ) );
 // Playground only prints step output on failure, so write it to the mount.
 file_put_contents( '/out/seed-check.txt', ( 0 === strpos( (string) $sample, $private_dir ) && is_readable( $sample ) ) ? 'OFFSITE-OK' : "OFFSITE-FAIL $sample" );

@@ -18,13 +18,18 @@ pnpm install
 pnpm dev                       # astro dev in site/ (default port 4321)
 pnpm typecheck                 # tsc --noEmit on the plugin
 pnpm --filter site typecheck   # astro check on the demo site
-scripts/verify.sh              # ~150 end-to-end checks against the running dev site
-scripts/verify-import.sh       # WordPress importer checks; needs network (WordPress Playground)
+pnpm test                      # unit + integration (Vitest); starts its own dev server
+pnpm test:unit                 # plugin modules in workerd (@cloudflare/vitest-plugin), ~1s
+pnpm test:integration          # HTTP tests against astro dev on port 4330
+pnpm test:import               # WordPress importer; needs network (WordPress Playground), port 4331
+pnpm vitest run tests/integration/feeds.test.ts -t "feed with the key"   # one file / one test
 ```
 
-- Both verify scripts default to `http://localhost:4329`, not Astro's default 4321. Run `pnpm dev --port 4329`, or set `BASE_URL`.
-- There's no unit-test runner and no way to run a single check. The verify scripts are bash with a `check name expected actual` helper; to focus on one area, comment out sections or copy the relevant block.
-- The verify scripts mutate the local dev state directly: they change the dev user's role, insert users and lock rows with `sqlite3` on the Miniflare D1 file, and count R2 objects under `site/.wrangler/state/v3/`. They need `sqlite3` and `curl`, log in via EmDash's dev-bypass, and must never point at a real deployment.
+- Tests live in [`tests/`](tests/), configured in [`vitest.config.ts`](vitest.config.ts) as three projects. CI is [`.github/workflows/test.yml`](.github/workflows/test.yml).
+- `unit` tests run inside workerd with a local `DOCUMENTS` R2 bucket; import plugin modules directly. `astro:middleware` is shimmed in [`tests/unit/shims/`](tests/unit/shims/).
+- `integration` and `import` start their own `astro dev` from [`tests/support/dev-server.ts`](tests/support/dev-server.ts), with `--ignore-lock` (so astro stays in the foreground and doesn't touch a running `pnpm dev`) and separate Miniflare state under `site/.wrangler-test/` (via `EDR_STATE_DIR`, read in [`site/astro.config.mjs`](site/astro.config.mjs)). Setup generates a throwaway `EMDASH_ENCRYPTION_KEY` in `site/.dev.vars` if you have none, and removes it afterwards. Set `EDR_DEV_LOG=1` to see the server's output.
+- Each role is a real user (`t-admin`, `t-editor`, `t-author`, `t-contributor`, `t-subscriber`, plus `t-other` as another owner/lock holder and `t-mutable` whose role the feed tests change) with its own session: dev-bypass signs in whoever has the `dev@emdash.local` email, so setup hands that email to each user in turn. Use `as("editor")` / `anon()` from [`tests/support/client.ts`](tests/support/client.ts); `makeDocument()` creates, uploads, sets visibility (public unless given) and publishes.
+- Tests reach into the dev server's local D1 (`node:sqlite`) for owners, lock rows, roles and the like, and count R2 objects from Miniflare's sqlite index. Integration files run serially because some change site-wide state (edit locking, the lock table, default visibility, feed keys); restore it in `afterAll`.
 - **Plugin code doesn't hot-reload, but the dev server restarts itself.** EmDash loads native plugin code once, so the plugin's integration watches `plugin/src` and restarts `astro dev` on changes (about 2s; watch `npx astro dev logs` for "restarting to reload the plugin"). If that ever misses a change, restart by hand: `npx astro dev stop && npx astro dev` from `site/`. A dev server can outlive its terminal; if a port is stuck, find it with `lsof -nP -iTCP:4329 -sTCP:LISTEN`.
 - Local dev is fully offline: D1, R2, Queues and the rate limiter are emulated by Miniflare under `site/.wrangler/`. Delete that directory to reset local data.
 
@@ -51,10 +56,10 @@ Key modules:
 - [`worker.ts`](plugin/src/worker.ts) and [`processing/`](plugin/src/processing/): the `DOC_JOBS` queue consumer that extracts text (locally for plain text, via Workers AI for PDF, Office and images). Optional bindings (`DOC_JOBS`, `AI`, `DOC_PASSWORD_LIMIT`) switch their features off quietly when absent.
 - The `documents` collection and `workflow_state` taxonomy are defined in [`site/seed/seed.json`](site/seed/seed.json), because plugins can't create collections. Sites copy them into their own seed.
 
-WordPress import: [`scripts/wpdr-export.php`](scripts/wpdr-export.php) runs on the WordPress server (`wp eval-file`) and writes a bundle. [`scripts/import-wpdr.mjs`](scripts/import-wpdr.mjs) posts it to the `files/import` and `files/source` endpoints with an admin-scoped API token. Run `scripts/verify-import.sh` after touching either.
+WordPress import: [`scripts/wpdr-export.php`](scripts/wpdr-export.php) runs on the WordPress server (`wp eval-file`) and writes a bundle. [`scripts/import-wpdr.mjs`](scripts/import-wpdr.mjs) posts it to the `files/import` and `files/source` endpoints with an admin-scoped API token. Run `pnpm test:import` after touching either.
 
 ## Conventions
 
 - `DOCUMENTS` must never be the EmDash media bucket: EmDash serves every media-bucket key publicly.
 - Where a workaround exists only because of an EmDash limitation, record the upstream change that would remove it in [`docs/upstream-requests.md`](docs/upstream-requests.md), and keep the platform constraints in [docs/architecture.md](docs/architecture.md) in sync.
-- Add verify checks for new behavior, and run `pnpm typecheck` plus `scripts/verify.sh` before a PR. Planned work and estimates are in [`ROADMAP.md`](ROADMAP.md).
+- Add tests for new behavior, and run `pnpm typecheck` plus `pnpm test` before a PR. Planned work and estimates are in [`ROADMAP.md`](ROADMAP.md).

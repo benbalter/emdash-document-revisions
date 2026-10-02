@@ -73,7 +73,6 @@ These are designs, ready to build once remote bindings (and their small usage co
 
 | Gap | Proposed approach | Est. |
 |---|---|---|
-| Unit tests and CI | Unit tests for `store.ts`, `access.ts` and `processing/`. Run [`scripts/verify.sh`](scripts/verify.sh) and [`scripts/verify-import.sh`](scripts/verify-import.sh) in CI against `astro dev`. | 2–3h |
 | Publish to npm | Build step (tsdown), `peerDependencies`, install docs. | 1h |
 | Run outside Cloudflare (Node) | A storage interface with R2, S3 (MinIO, AWS) and local-disk implementations (multipart plus conditional writes); an in-process fallback for the queue; an in-memory rate limiter; replace `FixedLengthStream`. EmDash core already supports Node. | 4–6h |
 
