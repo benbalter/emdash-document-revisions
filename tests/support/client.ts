@@ -279,5 +279,18 @@ export async function eventually<T>(fn: () => Promise<T | undefined>, timeoutMs 
 	}
 }
 
+/**
+ * Wait until text extraction has finished for every revision. The queue
+ * writes extracted text and then updates the manifest, so tests that count
+ * or delete a document's objects wait first: a late extraction could
+ * otherwise add objects behind their back.
+ */
+export async function textSettled(entryId: string): Promise<FilesView> {
+	return eventually(async () => {
+		const log = await as("admin").files(entryId);
+		return log.revisions.every((r) => r.text && r.text.status !== "pending") ? log : undefined;
+	}, 30_000);
+}
+
 /** The Cache-Control header, or null. */
 export const cacheControl = (res: Response) => res.headers.get("cache-control");

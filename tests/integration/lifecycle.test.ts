@@ -10,6 +10,7 @@ import {
 	ONE,
 	r2count,
 	settledR2Count,
+	textSettled,
 	TWO_PDF,
 	uniq,
 } from "../support/client";
@@ -26,6 +27,7 @@ describe("Trash, restore, permanent delete", () => {
 				{ body: TWO_PDF, type: "application/pdf", name: "two.pdf" },
 			],
 		});
+		await textSettled(id);
 		await admin.trash(id);
 	});
 
@@ -78,6 +80,7 @@ describe("Storage admin (stands in for plugin:uninstall)", () => {
 	beforeAll(async () => {
 		live = await makeDocument(uniq("verify-live"));
 		orphan = await makeDocument(uniq("verify-orphan"), { publish: false });
+		await textSettled(orphan);
 		// Simulate a document deleted while the plugin was off: the row
 		// vanishes and no hook runs.
 		db().run("delete from ec_documents where id = ?", orphan);
