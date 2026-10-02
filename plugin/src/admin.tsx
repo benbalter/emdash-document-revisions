@@ -647,6 +647,7 @@ interface StorageStats {
 	objects: number;
 	bytes: number;
 	purgeAllConfirmation: string;
+	passwordLimiter: boolean;
 }
 
 /**
@@ -727,11 +728,18 @@ function StoragePage() {
 					</span>
 				</label>
 			) : null}
+			{stats && !stats.passwordLimiter ? (
+				<p role="alert" className="text-kumo-danger">
+					Password-protected documents accept unlimited password guesses: this site has no{" "}
+					<code>DOC_PASSWORD_LIMIT</code> rate-limit binding. Add one to <code>wrangler.jsonc</code> (see the
+					README).
+				</p>
+			) : null}
 			<div className="space-y-1">
 				<h2 className="text-lg font-semibold">Revision feed keys</h2>
 				<p className="text-kumo-subtle">
-					Keys keep working until revoked, including for users who are later disabled. Revoke a departing user's
-					key from their panel, or everyone's here.
+					A disabled user's key stops working, but revoke a departing user's key anyway, from their panel, or
+					everyone's here.
 				</p>
 				<button
 					type="button"

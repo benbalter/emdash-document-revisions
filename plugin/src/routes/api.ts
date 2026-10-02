@@ -72,6 +72,11 @@ async function orphanIds(locals: App.Locals, ids: string[]): Promise<string[]> {
 	return orphans;
 }
 
+async function hasPasswordLimiter(): Promise<boolean> {
+	const { env } = await import("cloudflare:workers");
+	return Boolean((env as Record<string, unknown>).DOC_PASSWORD_LIMIT);
+}
+
 async function storage(locals: App.Locals) {
 	requireAdmin(locals);
 	const b = await bucket();
@@ -82,6 +87,8 @@ async function storage(locals: App.Locals) {
 		orphans: orphans.length,
 		...(await usage(b, "entries/")),
 		purgeAllConfirmation: PURGE_ALL_CONFIRMATION,
+		// Without this binding, password guesses are unlimited (routes/document.ts).
+		passwordLimiter: await hasPasswordLimiter(),
 	};
 }
 
