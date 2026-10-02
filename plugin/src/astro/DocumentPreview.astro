@@ -1,0 +1,78 @@
+---
+/**
+ * [document_preview]: the current file inline. PDFs in a frame, images
+ * directly, anything else as a download link. Uses the permalink, so the
+ * file is served only to viewers who may open it; others get a message.
+ */
+import { formatSize, previewDocument } from "../blocks";
+
+interface Props {
+	node: {
+		_type: "document-preview";
+		_key: string;
+		document?: string;
+		height?: number;
+		show_title?: boolean;
+		show_download?: boolean;
+	};
+}
+
+const { node } = Astro.props;
+const p = node.document ? await previewDocument(Astro.locals, Astro.cookies, node.document.trim()) : null;
+const height = Math.min(Math.max(Math.trunc(node.height ?? 600), 200), 2000);
+const showDownload = node.show_download ?? true;
+---
+
+{
+	p && (
+		<figure class="edr-preview">
+			{node.show_title && <figcaption class="edr-preview__title"><strong>{p.title}</strong></figcaption>}
+			{p.access === "allow" ? (
+				<>
+					{p.kind === "pdf" && (
+						<iframe src={p.url} title={p.title} width="100%" height={height} loading="lazy" style="border:0" />
+					)}
+					{p.kind === "image" && <img src={p.url} alt={p.title} loading="lazy" style={`max-width:100%;max-height:${height}px`} />}
+					{(showDownload || p.kind === "other") && (
+						<p class="edr-preview__download">
+							<a href={p.url}>Download {p.title}</a> ({p.type}, {formatSize(p.size)})
+						</p>
+					)}
+				</>
+			) : p.access === "password" ? (
+				<p class="edr-preview__locked">
+					This document is password protected. <a href={p.url}>Enter the password to view it.</a>
+				</p>
+			) : (
+				<p class="edr-preview__locked">You don't have access to this document.</p>
+			)}
+		</figure>
+	)
+}
+
+<style>
+	:where(.edr-preview) {
+		--edr-muted: color-mix(in srgb, currentColor 60%, transparent);
+		--edr-rule: color-mix(in srgb, currentColor 15%, transparent);
+		margin: 1.5em 0;
+	}
+	:where(.edr-preview iframe, .edr-preview img) {
+		display: block;
+		border: 1px solid var(--edr-rule);
+		border-radius: 6px;
+	}
+	:where(.edr-preview__title) {
+		margin-block-end: 0.5em;
+	}
+	:where(.edr-preview__download) {
+		margin: 0.5em 0 0;
+		font-size: 0.875em;
+	}
+	:where(.edr-preview__locked) {
+		margin: 0;
+		padding: 1em;
+		border: 1px dashed var(--edr-rule);
+		border-radius: 6px;
+		color: var(--edr-muted);
+	}
+</style>

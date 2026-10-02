@@ -1,0 +1,113 @@
+---
+/**
+ * [documents] / Latest Documents: a list of documents the viewer may open.
+ * Saved block fields arrive on `node` (see admin.portableTextBlocks).
+ */
+import { formatSize, listDocuments } from "../blocks";
+
+interface Props {
+	node: {
+		_type: string;
+		_key: string;
+		heading?: string;
+		limit?: number;
+		workflow_state?: string;
+		order_by?: "published" | "updated" | "title";
+		order?: "asc" | "desc";
+		show_summary?: boolean;
+		show_type?: boolean;
+		show_date?: boolean;
+		new_tab?: boolean;
+	};
+}
+
+const { node } = Astro.props;
+const latest = node._type === "latest-documents";
+const docs = await listDocuments(Astro.locals, {
+	limit: node.limit ?? (latest ? 5 : 20),
+	workflowState: node.workflow_state?.trim() || undefined,
+	orderBy: node.order_by ?? (latest ? "updated" : "published"),
+	order: node.order,
+});
+const target = node.new_tab ? { target: "_blank", rel: "noopener" } : {};
+const showType = node.show_type ?? true;
+const showDate = node.show_date ?? latest;
+---
+
+<section class="edr-documents" data-block={node._type}>
+	{node.heading && <p class="edr-documents__heading"><strong>{node.heading}</strong></p>}
+	{
+		docs.length === 0 ? (
+			<p class="edr-documents__empty">No documents.</p>
+		) : (
+			<ul class="edr-documents__list">
+				{docs.map((d) => (
+					<li>
+						<a href={d.url} {...target}>
+							{d.title}
+						</a>
+						{showType && (
+							<span class="edr-documents__meta">
+								{" "}
+								({d.type}, {formatSize(d.size)})
+							</span>
+						)}
+						{showDate && (
+							<span class="edr-documents__meta">
+								{" "}
+								· <time datetime={d.updatedAt}>{new Date(d.updatedAt).toLocaleDateString("en", { dateStyle: "medium" })}</time>
+							</span>
+						)}
+						{d.editUrl && (
+							<a class="edr-documents__edit" href={d.editUrl}>
+								{" "}
+								Edit
+							</a>
+						)}
+						{node.show_summary && d.summary && <p class="edr-documents__summary">{d.summary}</p>}
+					</li>
+				))}
+			</ul>
+		)
+	}
+</section>
+
+<style>
+	/*
+	 * Minimal defaults. :where() keeps specificity at zero so any theme
+	 * overrides them; colors follow the page via currentColor and these
+	 * custom properties.
+	 */
+	:where(.edr-documents) {
+		--edr-muted: color-mix(in srgb, currentColor 60%, transparent);
+		--edr-rule: color-mix(in srgb, currentColor 15%, transparent);
+		margin-block: 1.5em;
+	}
+	:where(.edr-documents__heading) {
+		margin: 0 0 0.5em;
+	}
+	:where(.edr-documents__list) {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+	}
+	:where(.edr-documents__list > li) {
+		padding-block: 0.6em;
+		border-block-end: 1px solid var(--edr-rule);
+	}
+	:where(.edr-documents__list > li:last-child) {
+		border-block-end: 0;
+	}
+	:where(.edr-documents__meta, .edr-documents__empty) {
+		color: var(--edr-muted);
+		font-size: 0.875em;
+	}
+	:where(.edr-documents__edit) {
+		font-size: 0.875em;
+		margin-inline-start: 0.5em;
+	}
+	:where(.edr-documents__summary) {
+		margin: 0.25em 0 0;
+		color: var(--edr-muted);
+	}
+</style>

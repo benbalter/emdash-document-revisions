@@ -14,16 +14,17 @@ A port of [WP Document Revisions](https://github.com/wp-document-revisions/wp-do
   - [`src/routes/files.ts`](plugin/src/routes/files.ts) — per-document API under core's content namespace: `/_emdash/api/content/documents/:id/files` (log, upload), `…/uploads/*` (multipart), `…/text`, `…/restore`, `…/visibility`, `…/import`.
   - [`src/routes/api.ts`](plugin/src/routes/api.ts) — site-wide API: `/_emdash/api/document-revisions/{me,settings,columns,feed-key,storage,purge-orphans,purge-all}`.
   - [`src/visibility.ts`](plugin/src/visibility.ts) — `filterPublicDocuments()` for site templates that list documents.
+  - [`src/blocks.ts`](plugin/src/blocks.ts) and [`src/astro/`](plugin/src/astro/) — the front-end blocks: viewer-aware data plus their Astro renderers (`emdash-document-revisions/astro`, wired through the descriptor's `componentsEntry`).
   - [`src/processing/`](plugin/src/processing/) and [`src/worker.ts`](plugin/src/worker.ts) — the text-extraction queue consumer (`emdash-document-revisions/worker`) and its processors.
   - [`src/access.ts`](plugin/src/access.ts) — access rules, the core edit-lock check, and password hashing and cookies.
   - [`src/store.ts`](plugin/src/store.ts) — the private R2 store: file objects plus one JSON manifest per document, updated with an etag compare-and-swap.
   - [`src/admin.tsx`](plugin/src/admin.tsx) — the editor sidebar panel, plus the **Upload document** and **Document settings** admin pages.
-- [`site/`](site/) — the EmDash Cloudflare starter, wired to the plugin. It adds:
+- [`site/`](site/) — EmDash's Cloudflare **starter** template, wired to the plugin. The starter ships no CSS by design ("a base you can build on rather than a finished theme"), so pages render with browser defaults; the document blocks bring their own minimal styles. It adds:
   - a `documents` collection and a `workflow_state` taxonomy, in [`seed/seed.json`](site/seed/seed.json);
   - a `DOCUMENTS` R2 binding, in [`wrangler.jsonc`](site/wrangler.jsonc);
   - an example public listing at [`src/pages/documents/index.astro`](site/src/pages/documents/index.astro).
 - [`scripts/wpdr-export.php`](scripts/wpdr-export.php) and [`scripts/import-wpdr.mjs`](scripts/import-wpdr.mjs) — migrate from WP Document Revisions; see [Import from WordPress](#import-from-wordpress).
-- [`scripts/verify.sh`](scripts/verify.sh) — end-to-end checks (136) against a local dev server. [`scripts/verify-import.sh`](scripts/verify-import.sh) checks the importer (36) against a real WordPress in [Playground](https://wordpress.org/playground/).
+- [`scripts/verify.sh`](scripts/verify.sh) — end-to-end checks (151) against a local dev server. [`scripts/verify-import.sh`](scripts/verify-import.sh) checks the importer (36) against a real WordPress in [Playground](https://wordpress.org/playground/).
 
 ## Run it
 
@@ -104,6 +105,7 @@ Documents with a file over the upload limit (100 MB) are reported and skipped be
 | Revision RSS feed with feed key | `/documents/:slug/feed?key=…` (Atom). Each user gets a secret key from the panel (shown once, revocable, stored hashed); the feed checks the user's current role and the document's visibility on every request. EmDash's plugin user lookup doesn't expose disabled accounts, so revoke a departing user's key (or everyone's, on the Document settings page). |
 | Admin list columns | **File** (type, size, revisions) and **Access** (visibility, who's editing) in the Documents list. |
 | Text extraction | A queue extracts text from every upload. The panel shows its status, and `GET …/files/text?n=` returns it. Plain-text formats are extracted locally (the first 25 MB of a larger file, marked truncated). PDF, Office and images need a Workers AI binding; files over 25 MB are skipped there, so a huge upload never exhausts a Worker's memory. |
+| Shortcodes, blocks and widget | Four Portable Text blocks in the editor's slash menu: **Document list** (`[documents]`: workflow-state filter, order, summaries, type and size, new tab, Edit links for editors), **Latest documents** (the widget; also works in a sidebar as a content widget), **Document revisions** (`[document_revisions]`) and **Document preview** (`[document_preview]`: PDFs and images inline, password prompt or "no access" otherwise). Each block applies the permalink rules for whoever is viewing the page. They ship small, zero-specificity default styles that any theme overrides. |
 | Streaming | Range requests (`206`, used by PDF viewers and media players) and `304` for an unchanged file, straight from R2. |
 | Workflow states | A taxonomy |
 | Migration | [Import from WordPress](#import-from-wordpress): full revision history, original numbering, authors, dates, notes, visibility and workflow states |
@@ -139,7 +141,7 @@ These are how EmDash 1.1 shapes the design. [docs/upstream-requests.md](docs/ups
 
 ## Verification
 
-[`scripts/verify.sh`](scripts/verify.sh) runs 136 checks against `pnpm dev`, using miniflare D1 and R2, on EmDash 1.1.0. They cover:
+[`scripts/verify.sh`](scripts/verify.sh) runs 151 checks against `pnpm dev`, using miniflare D1 and R2, on EmDash 1.1.0. They cover:
 
 - permalink shapes;
 - draft, private and password access for each role;

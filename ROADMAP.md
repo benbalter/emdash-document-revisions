@@ -13,7 +13,8 @@ This covers what's left between this port and [WP Document Revisions](https://gi
 - password rate limiting;
 - queue-driven text extraction;
 - revision feeds with per-user keys;
-- admin list columns.
+- admin list columns;
+- front-end blocks (Document list, Latest documents, Document revisions, Document preview).
 
 See the README's [parity table](README.md#parity-with-wp-document-revisions) and [platform constraints](README.md#platform-constraints). The EmDash changes that would remove workarounds are drafted in [docs/upstream-requests.md](docs/upstream-requests.md).
 
@@ -23,8 +24,6 @@ The audit covered WP Document Revisions' [feature list](https://github.com/wp-do
 
 | WP Document Revisions | Status | Proposed approach | Est. |
 |---|---|---|---|
-| Shortcodes, blocks, widget: `[documents]`, `[document_revisions]`, Latest Documents | Missing | Portable Text blocks plus Astro components (native `portableTextBlocks` / `componentsEntry`). The listing reuses `filterPublicDocuments`. | 3–4h |
-| `[document_preview]` | Missing | Portable Text block: PDF inline, other types as a download card, with an optional thumbnail (see Browser Rendering below). | 1–2h |
 | Email notifications on new revisions and workflow changes, with recipients | Missing | Needs a mail transport; see Email Sending below. Recipients go on the Document settings page. | 2h |
 | Lock-takeover email | Blocked | Core fires no takeover hook ([upstream request #2](docs/upstream-requests.md)). Until then, the panel could warn in-app. | 1h after the hook |
 | Configurable permalink base (`document_slug`) | Missing | Option on `documentRevisionsRoutes({ base })`, applied to `injectRoute` and `permalink()`. | 1h |

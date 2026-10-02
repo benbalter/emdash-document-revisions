@@ -42,6 +42,103 @@ const PLUGIN_ID = "document-revisions";
 const PLUGIN_VERSION = "0.2.0";
 const PACKAGE = "emdash-document-revisions";
 
+const toggle = (action_id: string, label: string, initial_value: boolean) => ({
+	type: "toggle" as const,
+	action_id,
+	label,
+	initial_value,
+});
+const documentField = {
+	type: "text_input" as const,
+	action_id: "document",
+	label: "Document slug",
+	placeholder: "employee-handbook",
+};
+
+/**
+ * Editor blocks matching WP Document Revisions' shortcodes and widget:
+ * [documents], [document_revisions], [document_preview], and Latest
+ * Documents (which also works as a sidebar widget: EmDash content widgets
+ * render Portable Text, plugin blocks included). Renderers: astro/.
+ */
+const PORTABLE_TEXT_BLOCKS = [
+	{
+		type: "document-list",
+		label: "Document list",
+		icon: "files",
+		description: "Documents visitors can open, optionally filtered by workflow state",
+		category: "Documents",
+		fields: [
+			{ type: "text_input" as const, action_id: "heading", label: "Heading" },
+			{ type: "number_input" as const, action_id: "limit", label: "How many", min: 1, max: 100, initial_value: 20 },
+			{ type: "text_input" as const, action_id: "workflow_state", label: "Workflow state (slug, optional)" },
+			{
+				type: "select" as const,
+				action_id: "order_by",
+				label: "Order by",
+				options: [
+					{ value: "published", label: "Published date" },
+					{ value: "updated", label: "Last updated" },
+					{ value: "title", label: "Title" },
+				],
+				initial_value: "published",
+			},
+			{
+				type: "select" as const,
+				action_id: "order",
+				label: "Order",
+				options: [
+					{ value: "desc", label: "Newest / Z–A first" },
+					{ value: "asc", label: "Oldest / A–Z first" },
+				],
+				initial_value: "desc",
+			},
+			toggle("show_summary", "Show summaries", false),
+			toggle("show_type", "Show file type and size", true),
+			toggle("new_tab", "Open in a new tab", false),
+		],
+	},
+	{
+		type: "latest-documents",
+		label: "Latest documents",
+		icon: "clock-counter-clockwise",
+		description: "Recently updated documents; also usable as a sidebar widget",
+		category: "Documents",
+		fields: [
+			{ type: "text_input" as const, action_id: "heading", label: "Heading", initial_value: "Latest documents" },
+			{ type: "number_input" as const, action_id: "limit", label: "How many", min: 1, max: 50, initial_value: 5 },
+			toggle("show_date", "Show date", true),
+			toggle("show_type", "Show file type and size", false),
+		],
+	},
+	{
+		type: "document-revisions",
+		label: "Document revisions",
+		icon: "list-numbers",
+		description: "A document's revision log (shown only to people who may open past revisions)",
+		category: "Documents",
+		fields: [
+			documentField,
+			{ type: "number_input" as const, action_id: "limit", label: "How many", min: 1, max: 100, initial_value: 10 },
+			toggle("show_notes", "Show revision notes", true),
+			toggle("new_tab", "Open in a new tab", false),
+		],
+	},
+	{
+		type: "document-preview",
+		label: "Document preview",
+		icon: "file-magnifying-glass",
+		description: "The current file inline: PDFs and images embedded, others as a download",
+		category: "Documents",
+		fields: [
+			documentField,
+			{ type: "number_input" as const, action_id: "height", label: "Height (px)", min: 200, max: 2000, initial_value: 600 },
+			toggle("show_title", "Show title", false),
+			toggle("show_download", "Show download link", true),
+		],
+	},
+];
+
 export function createPlugin() {
 	return definePlugin({
 		id: PLUGIN_ID,
@@ -50,6 +147,7 @@ export function createPlugin() {
 		capabilities: ["content:read", "users:read"],
 		admin: {
 			entry: `${PACKAGE}/admin`,
+			portableTextBlocks: PORTABLE_TEXT_BLOCKS,
 			pages: [
 				{ path: "/new", label: "Upload document", icon: "upload-simple" },
 				{ path: "/storage", label: "Document settings", icon: "gear" },
@@ -164,6 +262,7 @@ export function documentRevisions(): PluginDescriptor {
 		format: "native",
 		entrypoint: PACKAGE,
 		adminEntry: `${PACKAGE}/admin`,
+		componentsEntry: `${PACKAGE}/astro`,
 		options: {},
 	};
 }

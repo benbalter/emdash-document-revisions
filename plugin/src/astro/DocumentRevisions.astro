@@ -1,0 +1,70 @@
+---
+/**
+ * [document_revisions]: a document's revision log. Shown only to viewers
+ * who may open past revisions (Contributor and up, plus the document's own
+ * visibility rules); everyone else sees nothing.
+ */
+import { formatSize, listRevisions } from "../blocks";
+
+interface Props {
+	node: {
+		_type: "document-revisions";
+		_key: string;
+		document?: string;
+		limit?: number;
+		show_notes?: boolean;
+		new_tab?: boolean;
+	};
+}
+
+const { node } = Astro.props;
+const revisions = node.document ? await listRevisions(Astro.locals, node.document.trim(), node.limit ?? 10) : null;
+const target = node.new_tab ? { target: "_blank", rel: "noopener" } : {};
+const showNotes = node.show_notes ?? true;
+---
+
+{
+	revisions && revisions.length > 0 && (
+		<section class="edr-revisions">
+			<ol class="edr-revisions__list">
+				{revisions.map((r) => (
+					<li>
+						<a href={r.url} {...target}>
+							Revision {r.n}
+						</a>
+						<span class="edr-revisions__meta">
+							{" "}
+							({r.type}, {formatSize(r.size)}) · {r.authorName ?? "Unknown"} ·{" "}
+							<time datetime={r.createdAt}>{new Date(r.createdAt).toLocaleString("en", { dateStyle: "medium", timeStyle: "short" })}</time>
+							{r.current && " · current"}
+						</span>
+						{showNotes && r.note && <p class="edr-revisions__note">{r.note}</p>}
+					</li>
+				))}
+			</ol>
+		</section>
+	)
+}
+
+<style>
+	:where(.edr-revisions) {
+		--edr-muted: color-mix(in srgb, currentColor 60%, transparent);
+		--edr-rule: color-mix(in srgb, currentColor 15%, transparent);
+		margin-block: 1.5em;
+	}
+	:where(.edr-revisions__list) {
+		margin: 0;
+		padding-inline-start: 1.5em;
+	}
+	:where(.edr-revisions__list > li) {
+		padding-block: 0.5em;
+		border-block-end: 1px solid var(--edr-rule);
+	}
+	:where(.edr-revisions__meta) {
+		color: var(--edr-muted);
+		font-size: 0.875em;
+	}
+	:where(.edr-revisions__note) {
+		margin: 0.25em 0 0;
+	}
+</style>
