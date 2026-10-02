@@ -5,7 +5,7 @@ Document management for [EmDash](https://github.com/emdash-cms/emdash). Each doc
 It's a TypeScript port of [WP Document Revisions](https://github.com/wp-document-revisions/wp-document-revisions), the WordPress plugin, for EmDash on Cloudflare Workers. If you're moving a WordPress site to EmDash, the [importer](#import-from-wordpress) brings your document library along, history and old links included.
 
 > [!WARNING]
-> **Early and unproven.** It's been built and tested end to end against EmDash 1.1 in Cloudflare's local runtime, but not yet run on a production Cloudflare deployment. It isn't on npm, APIs may change before 1.0, and it relies on a few EmDash internals that a future EmDash release could move (see [Upgrading](#upgrading)). Try it on a test site first, and please [report what you find](https://github.com/benbalter/emdash-document-revisions/issues). Not affiliated with EmDash or Cloudflare.
+> **Early and unproven.** It's been built and tested end to end against EmDash 1.1 in Cloudflare's local runtime, but not yet run on a production Cloudflare deployment. APIs may change before 1.0, and it relies on a few EmDash internals that a future EmDash release could move (see [Upgrading](#upgrading)). Try it on a test site first, and please [report what you find](https://github.com/benbalter/emdash-document-revisions/issues). Not affiliated with EmDash or Cloudflare.
 
 | The documents list, with file and access columns | The editor's Document revisions panel |
 |---|---|
@@ -56,7 +56,13 @@ To add a document, use **Upload document** in the admin sidebar, or create a Doc
 
 ## Install into an EmDash site
 
-Until it's on npm, add the package from a local checkout, e.g. `pnpm add ../emdash-document-revisions/plugin`, or as a workspace package.
+Install the [package from npm](https://www.npmjs.com/package/emdash-document-revisions):
+
+```sh
+pnpm add emdash-document-revisions
+```
+
+It ships TypeScript source, which Astro compiles with the rest of your site, so there's nothing to build. Then:
 
 1. **Register both halves** in `astro.config.mjs`. A native EmDash plugin can't add site routes, so the document links and API come from a separate Astro integration.
    ```js
@@ -312,6 +318,16 @@ Issues and pull requests are welcome. Before opening a PR:
 - add tests for new behavior.
 
 Explain *why* in commit messages and PR descriptions. [ROADMAP.md](ROADMAP.md) lists what's planned, with estimates.
+
+### Releasing
+
+1. Bump `version` in [`plugin/package.json`](plugin/package.json) in a pull request and merge it.
+2. Tag the merge commit and push the tag:
+   ```sh
+   git tag -a v0.3.0 -m v0.3.0 && git push origin v0.3.0
+   ```
+
+The [Release workflow](.github/workflows/release.yml) checks the tag matches the package version, runs the typecheck and tests, publishes to npm with provenance through [trusted publishing](https://docs.npmjs.com/trusted-publishers) (no npm token is stored), and creates the GitHub release.
 
 ## Security
 

@@ -1,0 +1,58 @@
+name: Release
+
+# Pushing a vX.Y.Z tag publishes plugin/ to npm and creates a GitHub release.
+# npm authenticates this workflow through trusted publishing (OIDC), so there's
+# no npm token in the repository's secrets, and npm attaches provenance on its
+# own. The trusted publisher is tied to this file's name: renaming it breaks
+# publishing until the npm package settings are updated to match.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write # gh release create
+      id-token: write # npm trusted publishing
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Fail before testing if the tag and the package disagree, so a mistyped
+      # tag can't publish a version nobody meant to release.
+      - name: Check the tag matches plugin/package.json
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(jq -r .version plugin/package.json)
+          if [[ "$TAG" != "v$version" ]]; then
+            echo "::error::Tag $TAG doesn't match plugin/package.json version $version"
+            exit 1
+          fi
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      # Node 24 bundles npm 11, which trusted publishing needs (11.5.1+).
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      # npm, not pnpm: npm's trusted-publishing support is the reference
+      # implementation. The plugin has no workspace: dependencies to rewrite.
+      - name: Publish
+        working-directory: plugin
+        run: npm publish --access public
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" --verify-tag --generate-notes --title "$TAG"
