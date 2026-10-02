@@ -12,6 +12,8 @@ minimumReleaseAge: 1440
 minimumReleaseAgeExclude:
   - emdash
   - "@emdash-cms/*"
+  # Renovate security update: pnpm@11.11.0
+  - pnpm@11.11.0
 blockExoticSubdeps: true
 
 packages:
