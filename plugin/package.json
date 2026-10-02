@@ -1,13 +1,14 @@
 {
   "name": "emdash-document-revisions",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Document management for EmDash: versioned files stored privately in R2 and served through permission-checked permalinks.",
   "type": "module",
   "main": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
     "./admin": "./src/admin.tsx",
-    "./routes/document.ts": "./src/routes/document.ts"
+    "./routes/document.ts": "./src/routes/document.ts",
+    "./routes/api.ts": "./src/routes/api.ts"
   },
   "files": [
     "src",
