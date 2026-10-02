@@ -25,7 +25,7 @@ scripts/verify-import.sh       # WordPress importer checks; needs network (WordP
 - Both verify scripts default to `http://localhost:4329`, not Astro's default 4321. Run `pnpm dev --port 4329`, or set `BASE_URL`.
 - There's no unit-test runner and no way to run a single check. The verify scripts are bash with a `check name expected actual` helper; to focus on one area, comment out sections or copy the relevant block.
 - The verify scripts mutate the local dev state directly: they change the dev user's role, insert users and lock rows with `sqlite3` on the Miniflare D1 file, and count R2 objects under `site/.wrangler/state/v3/`. They need `sqlite3` and `curl`, log in via EmDash's dev-bypass, and must never point at a real deployment.
-- **Plugin code doesn't hot-reload.** After editing `plugin/src`, restart the dev server: `npx astro dev stop && npx astro dev` from `site/`. A dev server can outlive its terminal; if a port is stuck, find it with `lsof -nP -iTCP:4329 -sTCP:LISTEN`.
+- **Plugin code doesn't hot-reload, but the dev server restarts itself.** EmDash loads native plugin code once, so the plugin's integration watches `plugin/src` and restarts `astro dev` on changes (about 2s; watch `npx astro dev logs` for "restarting to reload the plugin"). If that ever misses a change, restart by hand: `npx astro dev stop && npx astro dev` from `site/`. A dev server can outlive its terminal; if a port is stuck, find it with `lsof -nP -iTCP:4329 -sTCP:LISTEN`.
 - Local dev is fully offline: D1, R2, Queues and the rate limiter are emulated by Miniflare under `site/.wrangler/`. Delete that directory to reset local data.
 
 ## Architecture
