@@ -19,6 +19,8 @@ It's a port of [WP Document Revisions](https://github.com/wp-document-revisions/
 - **Front-end blocks:** Document list, Latest documents (also a sidebar widget), Document revisions and Document preview.
 - **Admin tools.** An editor panel, an Upload document page, File and Access columns in the documents list, and a Document settings page (default visibility, feed keys, storage cleanup).
 - **WordPress importer** that keeps revision numbers, authors, dates, notes, visibility and workflow states, so old links keep working.
+- **Search** that includes public documents but never shows a visitor a private or password-protected title.
+- **SSO-ready.** EmDash supports [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) logins, and every rule here uses EmDash's roles, so private documents work behind your SSO unchanged.
 
 ## Requirements
 
@@ -57,7 +59,7 @@ Until it's on npm, add the package from a local checkout, e.g. `pnpm add ../emda
    ],
    ```
 2. **Add a `DOCUMENTS` R2 bucket** in `wrangler.jsonc`. It must be a **different bucket** from EmDash's media bucket, because EmDash serves every media-bucket key publicly (see [constraint 1](#platform-constraints)).
-3. **Add the `documents` collection** (and, if you want them, the `workflow_state` taxonomy) to your seed. Copy them from [`site/seed/seed.json`](site/seed/seed.json). Leave `search` out of the collection's `supports`; see [constraint 4](#platform-constraints).
+3. **Add the `documents` collection** (and, if you want them, the `workflow_state` taxonomy) to your seed. Copy them from [`site/seed/seed.json`](site/seed/seed.json). Search can stay on: the plugin filters restricted documents out of search results (see [constraint 4](#platform-constraints)).
 4. **Set `EMDASH_ENCRYPTION_KEY`.** EmDash already requires it, and this plugin also signs password-protected documents' cookies with it.
 5. **Listing documents in your own templates:** use the Document list component (as [`site/src/pages/documents/index.astro`](site/src/pages/documents/index.astro) does), or filter `getEmDashCollection("documents")` through `filterPublicDocuments()` from `emdash-document-revisions/visibility`. Otherwise private and password-protected titles appear in public listings.
 6. **Optional, recommended:**
@@ -82,6 +84,7 @@ Until it's on npm, add the package from a local checkout, e.g. `pnpm add ../emda
 | `DOC_PASSWORD_LIMIT` | Rate-limit binding | No | Throttles password attempts per visitor and document (the demo allows 5 a minute). Cloudflare counts per location and approximately. |
 | `DOCUMENT_MAX_FILE_BYTES` | Variable | No | Largest upload, default 5 GB. |
 | `DOCUMENT_PASSWORD_ITERATIONS` | Variable | No | PBKDF2 cost for document passwords, default 20,000 (sized for Workers Free); 10,000–100,000. |
+| `DOCUMENT_D1_BINDING` | Variable | No | Name of the site's D1 binding (default `DB`), used to refuse feed keys of disabled accounts. Without a readable D1 database, feeds are refused. |
 
 ## Using it
 
@@ -225,17 +228,37 @@ These are how EmDash 1.1 shapes the design. [docs/upstream-requests.md](docs/ups
    - **Site-wide actions** sit outside that namespace, where EmDash fails closed to the `admin` scope.
 3. **Anonymous requests get no content handlers.** EmDash's anonymous fast path carries no database, to keep public pages fast. Anonymous permalinks resolve through `getEmDashEntry()`, which only returns published entries, and that's all an anonymous visitor may see anyway.
 4. **Private titles.** Visibility lives in the plugin's private manifest, so a password hash can never leak through EmDash's content APIs, and EmDash has no per-entry read policy. So:
-   - The `documents` collection doesn't enable `search`. Public search never returns documents; admin search still works through its plain-match fallback.
-   - Templates that list documents must filter them (see [install step 5](#install-into-an-emdash-site)).
-   - Sitemaps aren't affected: EmDash only builds them for collections with SEO enabled.
-5. **The lock check reads EmDash's table directly** (`_emdash_entry_locks`), because EmDash exposes no lock API. If a future EmDash changes that table, writes **fail closed** with a 503.
+   - **Search:** the plugin injects an Astro middleware (`order: "post"`, after EmDash's own). It removes, from EmDash's public search and suggestion responses, every document the viewer couldn't open. Visitors find public documents, and authors and editors find the restricted ones they may open.
+   - **Template listings:** in-process queries such as `getEmDashCollection("documents")` can't be intercepted, so templates that list documents must filter them (see [install step 5](#install-into-an-emdash-site)).
+   - **Sitemaps** aren't affected: EmDash only builds them for collections with SEO enabled.
+5. **The lock check calls EmDash's lock route internally.** EmDash exposes no lock API to plugins, so the plugin calls the handler behind `GET /_emdash/api/content/:collection/:id/lock` in-process, as the caller, using an internal package export. EmDash itself then decides whether locking is on, whether the lease has expired and who holds it. If a future EmDash moves that route, writes **fail closed** with a 503.
 6. **Native plugins never get `plugin:uninstall`.** EmDash only runs it for marketplace installs. The Document settings page covers cleanup instead.
 7. **Permissions are fixed.** EmDash's roles are fixed, and plugins can't define new permissions. WordPress capabilities like `read_private_documents` become rules in [`access.ts`](plugin/src/access.ts).
 8. **Revision feeds need plugin context.** Feed readers send no session, and anonymous site requests have no database. So the feed's permission check runs in a public plugin route (`feed-data`) called in-process, and the site route renders the Atom, because plugin raw responses can't serve XML.
-9. **Feed keys and disabled users.** EmDash's plugin user API doesn't expose whether an account is disabled, so revoke a departing user's feed key, or everyone's on Document settings.
+9. **Feed keys and disabled users.** EmDash's plugin user API doesn't say whether an account is disabled. So the feed route reads `users.disabled` from the site's D1 binding (`DOCUMENT_D1_BINDING`, default `DB`), and refuses the feed if it can't tell. Revoking keys at offboarding is still good hygiene; Document settings can revoke everyone's.
 10. **Password hashing is sized for Workers Free.** WebCrypto counts toward the Worker's CPU budget (about 10 ms on Free). These are shared access codes, not account passwords (WordPress stores post passwords in plaintext). Raise the cost on Workers Paid with `DOCUMENT_PASSWORD_ITERATIONS`. Existing hashes keep their own count.
-11. **SSO.** EmDash supports [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) as a login method, and every rule here uses EmDash's roles. So private documents work behind SSO with no changes.
-12. **Native plugin code doesn't hot-reload** under `astro dev`. Restart it with `npx astro dev stop && npx astro dev`.
+11. **Native plugin code doesn't hot-reload** under `astro dev`, because EmDash loads it once. When the package is a linked checkout (as in this workspace), its integration watches its own source and restarts the dev server on changes, which takes about two seconds.
+
+### Why a native plugin, not a sandboxed one
+
+EmDash can run plugins in a sandbox: an isolated Worker that reaches the outside only through capabilities it declares, installable in one click from EmDash's registry. This plugin can't work that way today. A sandboxed plugin:
+- has no private file storage: only EmDash's media library, which serves every file publicly by key;
+- can't add site routes, so there are no plain-link downloads (private plugin routes need a CSRF header even on GET, and public ones don't know the visitor);
+- is limited to 8 MiB bodies;
+- can't render front-end blocks;
+- can't read EmDash's edit lock or use Queues, rate limiting or Workers AI.
+
+Moving only the declarative parts (hooks, settings, a Block Kit panel) into a sandbox would still need a trusted companion package for storage, permalinks and blocks, which keeps the security cost of native code.
+
+| | Native (this plugin) | Sandboxed |
+|---|---|---|
+| Private storage, streaming, 5 GB uploads, permalinks, blocks | ✓ | ✗ |
+| Install | npm + `astro.config` + redeploy | One click from the registry |
+| Trust | Full access to the site, its database and secrets | Isolated; declared capabilities need the site owner's consent |
+| EmDash upgrades | Reads some EmDash internals (see constraints 5 and 8) | Stable plugin API only |
+| Plan | Any Workers plan | Workers Paid (Worker Loader) |
+
+So install it only from a source you trust, as with any native EmDash plugin. The EmDash changes that would make a sandboxed version possible are drafted in [docs/upstream-requests.md](docs/upstream-requests.md#6-what-a-sandboxed-version-would-need).
 
 ### Running outside Cloudflare
 

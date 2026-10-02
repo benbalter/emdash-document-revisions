@@ -44,7 +44,6 @@ The audit covered WP Document Revisions' [feature list](https://github.com/wp-do
 |---|---|---|---|
 | First-write race on a new manifest | Concurrent first writes, now less likely because the manifest is created when the entry is. | `onlyIf` on create, or a sentinel object. | 30m |
 | Visibility isn't versioned | It lives in the manifest so a password can't leak through content APIs. | Log visibility changes as timeline events. | 30m |
-| Public documents aren't in site search | `search` is off for the collection so that private titles can't leak. | AI Search (below), or [upstream request #4](docs/upstream-requests.md). | — |
 
 ## Cloudflare integrations
 

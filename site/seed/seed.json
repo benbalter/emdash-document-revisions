@@ -86,19 +86,22 @@
 			"urlPattern": "/documents/{slug}",
 			"supports": [
 				"drafts",
-				"revisions"
+				"revisions",
+				"search"
 			],
 			"fields": [
 				{
 					"slug": "title",
 					"label": "Title",
 					"type": "string",
-					"required": true
+					"required": true,
+					"searchable": true
 				},
 				{
 					"slug": "summary",
 					"label": "Summary",
-					"type": "text"
+					"type": "text",
+					"searchable": true
 				}
 			]
 		}

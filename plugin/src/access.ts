@@ -152,39 +152,52 @@ export interface LockHolder {
 	expiresAt: string;
 }
 
+type LockRoute = (ctx: { params: Record<string, string>; locals: Locals; url: URL }) => Promise<Response>;
+
 /**
- * The live core edit lock on this entry, if any and if the collection has
- * locking on. Core exposes no handler for this outside its own routes, so
- * read its table the way EntryLockRepository.findEnforceable does.
+ * The live core edit lock on this entry, if any. Asks core's own lock route
+ * handler (`GET /_emdash/api/content/:collection/:id/lock`), called
+ * in-process with the caller's locals, so core decides: whether the
+ * collection locks at all, lease expiry, and who holds it. The route also
+ * checks the caller may edit the entry; a refusal there means "can't tell",
+ * which reads treat as no lock and writes treat as unavailable.
  */
 export async function liveLock(locals: Locals, entryId: string): Promise<LockHolder | null> {
-	const db = locals.emdash?.db;
-	if (!db) throw new LockCheckUnavailable(new Error("No database on locals"));
-	const rows = await db
-		.selectFrom("_emdash_entry_locks")
-		.innerJoin("_emdash_collections", "_emdash_collections.slug", "_emdash_entry_locks.collection")
-		.leftJoin("users", "users.id", "_emdash_entry_locks.user_id")
-		.select([
-			"_emdash_entry_locks.user_id as userId",
-			"_emdash_entry_locks.expires_at as expiresAt",
-			"users.name as userName",
-		])
-		.where("_emdash_entry_locks.collection", "=", COLLECTION)
-		.where("_emdash_entry_locks.entry_id", "=", entryId)
-		.where("_emdash_collections.edit_locking", "!=", 0)
-		.execute()
-		.catch((e: unknown) => {
-			throw new LockCheckUnavailable(e);
-		});
-	const now = Date.now();
-	const live = rows.find((r) => Date.parse(String(r.expiresAt)) > now);
-	return live
-		? {
-				userId: String(live.userId),
-				userName: (live.userName as string | null) ?? null,
-				expiresAt: String(live.expiresAt),
-			}
+	const status = await coreLockStatus(locals, entryId);
+	if (!status.ok) throw new LockCheckUnavailable(new Error(`Lock route answered ${status.code}`));
+	const { enabled, holder } = status.data;
+	return enabled && holder
+		? { userId: holder.userId, userName: holder.userName ?? null, expiresAt: holder.expiresAt }
 		: null;
+}
+
+async function coreLockStatus(
+	locals: Locals,
+	entryId: string,
+): Promise<
+	| { ok: true; data: { enabled: boolean; heldByCaller: boolean; holder: LockHolder | null } }
+	| { ok: false; code: number }
+> {
+	let route: LockRoute;
+	try {
+		// @ts-expect-error -- untyped deep import of core's route module.
+		({ GET: route } = (await import("emdash/internal/routes/api/content/_collection_/_id_/lock")) as { GET: LockRoute });
+	} catch (e) {
+		throw new LockCheckUnavailable(e);
+	}
+	const res = await route({
+		params: { collection: COLLECTION, id: entryId },
+		locals,
+		url: new URL("http://internal/"),
+	}).catch((e: unknown) => {
+		throw new LockCheckUnavailable(e);
+	});
+	if (!res.ok) return { ok: false, code: res.status };
+	const body = (await res.json()) as {
+		data?: { enabled: boolean; heldByCaller: boolean; holder: LockHolder | null };
+	};
+	if (!body.data) return { ok: false, code: 502 };
+	return { ok: true, data: body.data };
 }
 
 /**
@@ -197,8 +210,10 @@ export async function lockedByOther(
 	entryId: string,
 	userId: string,
 ): Promise<LockHolder | null> {
-	const lock = await liveLock(locals, entryId);
-	return lock && lock.userId !== userId ? lock : null;
+	const status = await coreLockStatus(locals, entryId);
+	if (!status.ok) throw new LockCheckUnavailable(new Error(`Lock route answered ${status.code}`));
+	const { enabled, holder, heldByCaller } = status.data;
+	return enabled && holder && !heldByCaller && holder.userId !== userId ? holder : null;
 }
 
 // --- Password protection -------------------------------------------------

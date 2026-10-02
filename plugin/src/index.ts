@@ -192,6 +192,8 @@ export function createPlugin() {
 					if (access !== "allow") return denied;
 					return {
 						ok: true as const,
+						// The site route checks this account isn't disabled (see accountActive()).
+						userId: user.id,
 						title: String(item.data.title ?? slug),
 						slug,
 						updatedAt: manifest.revisions.at(-1)!.createdAt,
@@ -272,7 +274,31 @@ export function documentRevisionsRoutes(): AstroIntegration {
 	return {
 		name: PACKAGE,
 		hooks: {
-			"astro:config:setup": ({ injectRoute }) => {
+			/**
+			 * Dev convenience: EmDash loads native plugin code once, so edits to
+			 * this package don't hot-reload. Watch our own source and restart
+			 * the dev server when it changes (only when the package is a linked
+			 * checkout, which is the only time anyone edits it).
+			 */
+			"astro:server:setup": ({ server, logger }) => {
+				// No imports here: this runs after Astro has closed the module runner
+				// that loaded the config, so a dynamic import would throw.
+				const dir = decodeURIComponent(new URL(".", import.meta.url).pathname);
+				if (dir.includes("/node_modules/")) return;
+				server.watcher.add(dir);
+				let restarting = false;
+				server.watcher.on("change", (file: string) => {
+					if (restarting || !file.startsWith(dir)) return;
+					restarting = true;
+					logger.info(`${file.slice(dir.length)} changed; restarting to reload the plugin`);
+					void server.restart().finally(() => {
+						restarting = false;
+					});
+				});
+			},
+			"astro:config:setup": ({ injectRoute, addMiddleware }) => {
+				// Filters private/password document hits out of EmDash's public search.
+				addMiddleware({ entrypoint: `${PACKAGE}/middleware.ts`, order: "post" });
 				injectRoute({
 					pattern: "/documents/[...path]",
 					entrypoint: `${PACKAGE}/routes/document.ts`,

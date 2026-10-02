@@ -57,3 +57,16 @@ These are drafts of issues for [emdash-cms/emdash](https://github.com/emdash-cms
 **Ask.** Allow native plugin routes to opt into streaming, e.g. `request: { body: "stream" }`, and return a `Response` directly.
 
 **Workaround today.** Injected Astro routes under `/_emdash/api/content/…`, which also get core's auth, CSRF and token-scope handling.
+
+---
+
+## 6. What a sandboxed version would need
+
+**Problem.** Sandboxed plugins are the safer, one-click way to extend EmDash, but a document library can't be one. Its core guarantee, private files behind permission-checked links, needs things only native plugins can do today. Each of these would also help other file-handling plugins:
+
+1. **Plugin-private object storage.** A capability such as `storage:objects` that gives the plugin its own namespaced, non-public R2 prefix with streaming reads and writes, ranges, conditional writes and multipart uploads. Today a sandboxed plugin's only file storage is the media library, which serves every key publicly.
+2. **Authenticated, link-friendly GET routes.** A route option such as `{ methods: ["GET"], linkable: true }`, for side-effect-free GETs that accept the session cookie without the `X-EmDash-Request` header. That makes plain `<a href>` downloads work, and they should see `routeCtx.user`. Today private routes need the header and public routes see no user.
+3. **Streaming bodies.** Request and response streaming for routes that opt in (request #5), past the 8 MiB buffer.
+4. **Edit-lock access.** Request #1, exposed to the sandbox as a capability.
+
+With these, everything but the front-end block renderers could run sandboxed. Those could stay in a small trusted renderer package, or EmDash could let sandboxed plugins ship Portable Text renderers as declarative templates.

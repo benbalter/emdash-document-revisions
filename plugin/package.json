@@ -33,7 +33,8 @@
     "./routes/api.ts": "./src/routes/api.ts",
     "./worker": "./src/worker.ts",
     "./astro": "./src/astro/index.ts",
-    "./astro/DocumentList.astro": "./src/astro/DocumentList.astro"
+    "./astro/DocumentList.astro": "./src/astro/DocumentList.astro",
+    "./middleware.ts": "./src/middleware.ts"
   },
   "files": [
     "src",
