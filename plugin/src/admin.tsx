@@ -39,8 +39,15 @@ interface RevisionsResponse {
 
 function formatSize(bytes: number): string {
 	if (bytes < 1024) return `${bytes} B`;
-	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-	return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+	const units = ["KB", "MB", "GB", "TB"];
+	let value = bytes / 1024;
+	let unit = 0;
+	while (value >= 1024 && unit < units.length - 1) {
+		value /= 1024;
+		unit++;
+	}
+	// "5 GB" rather than "5.0 GB"; one decimal only when it says something.
+	return `${value.toLocaleString(undefined, { maximumFractionDigits: 1 })} ${units[unit]}`;
 }
 
 const message = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
@@ -130,12 +137,14 @@ function VisibilityControl({
 	return (
 		<fieldset className="space-y-2" disabled={disabled}>
 			<legend className="font-medium">Visibility</legend>
-			{(["public", "private", "password"] as const).map((m) => (
-				<label key={m} className="mr-3 inline-flex items-center gap-1">
-					<input type="radio" name="edr-visibility" checked={mode === m} onChange={() => setMode(m)} />
-					{m === "public" ? "Public" : m === "private" ? "Private" : "Password protected"}
-				</label>
-			))}
+			<div className="flex flex-wrap gap-x-4 gap-y-1">
+				{(["public", "private", "password"] as const).map((m) => (
+					<label key={m} className="inline-flex items-center gap-2">
+						<input type="radio" name="edr-visibility" checked={mode === m} onChange={() => setMode(m)} />
+						{m === "public" ? "Public" : m === "private" ? "Private" : "Password protected"}
+					</label>
+				))}
+			</div>
 			{mode === "password" ? (
 				<input
 					type="password"
@@ -179,7 +188,7 @@ function TextStatus({ text }: { text?: Revision["text"] }) {
 			: text.status === "done"
 				? `Text: extracted (${(text.chars ?? 0).toLocaleString()} characters${text.truncated ? ", truncated" : ""})`
 				: text.status === "skipped"
-					? "Text: not extracted for this file type"
+					? `Text: not extracted (${text.error ?? "unsupported file type"})`
 					: `Text: extraction failed${text.error ? ` (${text.error})` : ""}`;
 	return <div className="text-kumo-subtle">{label}</div>;
 }
@@ -421,7 +430,8 @@ function DocumentRevisionsPanel({ entry }: ContentEditorPanelContext) {
 							</li>
 						) : (
 							<li key={`e${item.id}`} className="text-kumo-subtle">
-								Details saved by {item.authorName ?? "unknown"} · {new Date(item.at).toLocaleString()}
+								{/* Core records no author for some saves (e.g. over the API). */}
+								Details saved{item.authorName ? ` by ${item.authorName}` : ""} · {new Date(item.at).toLocaleString()}
 							</li>
 						),
 					)}

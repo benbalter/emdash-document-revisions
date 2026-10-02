@@ -9,9 +9,10 @@
  */
 
 import { MAX_TEXT_CHARS, processors, textKey, type Job, type ProcessorEnv, type TextInfo } from "./processing";
+import { AI_SUPPORTED } from "./processing/ai-markdown";
 import { bucket, readManifest, updateManifest } from "./store";
 
-async function setText(entryId: string, fileKey: string, text: TextInfo) {
+export async function setText(entryId: string, fileKey: string, text: TextInfo) {
 	const b = await bucket();
 	const { manifest } = await readManifest(b, entryId);
 	if (!manifest) return; // Document deleted meanwhile.
@@ -37,13 +38,16 @@ export async function processJob(job: Job, env: ProcessorEnv): Promise<TextInfo>
 		return info;
 	};
 	const processor = processors.find((p) => p.accepts(job, env));
-	if (!processor) return skip();
+	if (!processor) {
+		// Say what would help: PDF, Office and images only need the AI binding.
+		return skip(AI_SUPPORTED.test(job.filename) ? "needs a Workers AI binding" : undefined);
+	}
 
 	// Size first, so a multi-gigabyte upload never gets read into memory.
 	const head = await b.head(job.key);
 	if (!head) throw new Error(`File ${job.key} is missing`);
 	if (processor.maxBytes && head.size > processor.maxBytes) {
-		return skip(`Too large to extract (${Math.round(head.size / 1048576)} MB)`);
+		return skip(`too large to extract (${Math.round(head.size / 1048576)} MB)`);
 	}
 	const partial = Boolean(processor.readBytes && head.size > processor.readBytes);
 	const file = await b.get(job.key, partial ? { range: { offset: 0, length: processor.readBytes! } } : undefined);

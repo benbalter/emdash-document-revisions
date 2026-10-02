@@ -22,6 +22,7 @@ import type { APIRoute } from "astro";
 import { canEdit, canSeeFiles, hashPassword, liveLock } from "../access";
 import type { Entry, User } from "../access";
 import { enqueue, textKey } from "../processing";
+import { setText } from "../worker";
 import { handle, HttpError, ok, readJson, requireEntry, requireUser, requireWritable } from "../http";
 import {
 	bucket,
@@ -48,12 +49,21 @@ export const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 
 const publicRevision = ({ key: _key, ...r }: RevisionRecord) => r;
 
-/** Hand a new file to the processing queue (no-op without DOC_JOBS). */
+/**
+ * Hand a new file to the processing queue. Without DOC_JOBS, or if sending
+ * fails, record why, so the panel doesn't show "processing" forever.
+ */
 async function queueText(entryId: string, r: RevisionRecord) {
-	await enqueue({ entryId, n: r.n, key: r.key, contentType: r.contentType, filename: r.filename }).catch((e) => {
+	const skipped = (error: string) =>
+		setText(entryId, r.key, { status: "skipped", error, updatedAt: new Date().toISOString() });
+	try {
+		const queued = await enqueue({ entryId, n: r.n, key: r.key, contentType: r.contentType, filename: r.filename });
+		if (!queued) await skipped("no processing queue configured");
+	} catch (e) {
 		// Processing is best-effort; never fail the upload over it.
 		console.error("[document-revisions] enqueue failed", e);
-	});
+		await skipped("couldn't queue for processing").catch(() => undefined);
+	}
 }
 
 /**
