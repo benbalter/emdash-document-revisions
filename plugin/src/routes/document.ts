@@ -38,10 +38,15 @@ export const GET: APIRoute = async ({ params, locals }) => {
 	const latest = manifest?.revisions.at(-1);
 	if (!manifest || !latest) return notFound();
 
-	// getEmDashEntry only returns published entries outside preview/edit mode,
-	// which is exactly the "is this public?" question.
+	// getEmDashEntry also returns drafts in preview/edit mode, so check status
+	// explicitly; a draft must never go out with a public Cache-Control.
 	const { entry } = await getEmDashEntry(COLLECTION, slug);
-	const isPublic = Boolean(entry) && n === null;
+	const data = (entry?.data ?? {}) as { id?: unknown; status?: unknown };
+	const liveId = typeof data.id === "string" ? data.id : entry?.id;
+	// A recycled slug (old document deleted, new one took its slug before any
+	// upload re-indexed it) must not serve the old document's files.
+	if (entry && liveId !== entryId) return notFound();
+	const isPublic = data.status === "published" && n === null;
 	const canReadDrafts = (locals.user?.role ?? 0) >= Role.CONTRIBUTOR;
 
 	// 404 rather than 403 so private document slugs don't leak.
@@ -59,7 +64,11 @@ export const GET: APIRoute = async ({ params, locals }) => {
 			"Content-Length": String(revision.size),
 			"Content-Disposition": contentDisposition(revision.filename, revision.contentType),
 			"X-Content-Type-Options": "nosniff",
-			"Content-Security-Policy": "sandbox",
+			// Chrome's PDF viewer renders blank under a sandbox CSP. PDFs are the
+			// only inline type it's dropped for; scriptable types never go inline.
+			...(revision.contentType === "application/pdf"
+				? {}
+				: { "Content-Security-Policy": "sandbox" }),
 			"Cache-Control": isPublic ? "public, max-age=60" : "private, no-store",
 			ETag: obj.httpEtag,
 		},

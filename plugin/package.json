@@ -13,7 +13,7 @@
     "src",
     "seed"
   ],
-  "license": "GPL-3.0-or-later",
+  "license": "MIT",
   "scripts": {
     "typecheck": "tsc --noEmit"
   },

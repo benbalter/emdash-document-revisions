@@ -49,14 +49,22 @@ Text extraction and diffs, email notifications, a front-end block or list, WXR/W
 
 ## Verified locally
 
-The following was checked with curl and in the browser against `astro dev` (miniflare R2/D1), EmDash 1.1.0:
+The following was checked with curl and in Chrome against `astro dev` (miniflare R2/D1), EmDash 1.1.0.
 
-- Two-revision upload and log.
-- Draft permalink: anonymous gets 404, admin gets 200.
-- After publish: anonymous gets the latest file, but past revisions 404.
-- The media route can't reach document keys.
-- The 9 MiB upload gets a 413.
-- Author uploading or locking someone else's document gets a 403.
-- Missing parameter gets a 400.
-- Slug rename: the new slug gets 200 and the old one 301.
-- Browser: the panel upload of a PDF downloads back byte-identical and inline, and check-out/check-in works.
+| Request | Expected and observed |
+|---|---|
+| Upload two revisions, then read the log | Both revisions listed |
+| Draft permalink | anon 404, Subscriber 404, Contributor 200, Admin 200 |
+| Published latest file | anon 200 with `public, max-age=60` |
+| Published past revision | anon 404, Subscriber 404, Contributor 200 |
+| Draft in edit mode | `private, no-store` |
+| Recycled slug (old document permanently deleted, new published document reuses the slug) | 404; the old file doesn't leak |
+| Media route with a document key | 404 |
+| 9 MiB upload | 413 |
+| Author uploading to or locking another's document | 403 |
+| Missing parameter | 400 |
+| Slug rename | New slug 200, old slug 301 |
+| Panel upload of a PDF | Byte-identical, renders inline in Chrome's viewer |
+| Check-out / check-in | Works |
+
+Chrome's PDF viewer renders blank under `Content-Security-Policy: sandbox`, so PDFs are the one inline type served without it. `nosniff` stays on for everything.
