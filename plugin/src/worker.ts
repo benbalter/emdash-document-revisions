@@ -31,17 +31,25 @@ export async function processJob(job: Job, env: ProcessorEnv): Promise<TextInfo>
 	}
 	if (existing?.status === "done") return existing;
 
-	const processor = processors.find((p) => p.accepts(job, env));
-	if (!processor) {
-		const info: TextInfo = { status: "skipped", updatedAt: new Date().toISOString() };
+	const skip = async (error?: string) => {
+		const info: TextInfo = { status: "skipped", ...(error ? { error } : {}), updatedAt: new Date().toISOString() };
 		await setText(job.entryId, job.key, info);
 		return info;
-	}
+	};
+	const processor = processors.find((p) => p.accepts(job, env));
+	if (!processor) return skip();
 
-	const file = await b.get(job.key);
+	// Size first, so a multi-gigabyte upload never gets read into memory.
+	const head = await b.head(job.key);
+	if (!head) throw new Error(`File ${job.key} is missing`);
+	if (processor.maxBytes && head.size > processor.maxBytes) {
+		return skip(`Too large to extract (${Math.round(head.size / 1048576)} MB)`);
+	}
+	const partial = Boolean(processor.readBytes && head.size > processor.readBytes);
+	const file = await b.get(job.key, partial ? { range: { offset: 0, length: processor.readBytes! } } : undefined);
 	if (!file) throw new Error(`File ${job.key} is missing`);
 	let text = await processor.run(file, job, env);
-	const truncated = text.length > MAX_TEXT_CHARS;
+	const truncated = partial || text.length > MAX_TEXT_CHARS;
 	if (truncated) text = text.slice(0, MAX_TEXT_CHARS);
 	await b.put(textKey(job.entryId, job.key), text, {
 		httpMetadata: { contentType: "text/markdown; charset=utf-8" },

@@ -9,6 +9,7 @@
  *   GET|POST /_emdash/api/document-revisions/settings   site-wide document settings (Admin)
  *   GET  /_emdash/api/document-revisions/columns?ids=…   content-list cells for visible rows
  *   GET|POST|DELETE /_emdash/api/document-revisions/feed-key   the caller's revision-feed key
+ *   POST /_emdash/api/document-revisions/revoke-feed-keys      revoke every user's key (Admin)
  *
  * The storage actions stand in for `plugin:uninstall`, which EmDash only
  * runs for marketplace and registry plugins, never for native plugins
@@ -18,7 +19,7 @@
 
 import type { APIRoute } from "astro";
 
-import { canReadDrafts, canReadPrivate, getEntry, liveLock } from "../access";
+import { canReadDrafts, canSeeFiles, getEntry, liveLock } from "../access";
 import { handle, HttpError, ok, readJson, requireUser } from "../http";
 import {
 	bucket,
@@ -31,6 +32,7 @@ import {
 	listStoredEntryIds,
 	readManifest,
 	readSettings,
+	revokeAllFeedKeys,
 	revokeFeedKey,
 	Role,
 	usage,
@@ -127,7 +129,7 @@ async function columns(locals: App.Locals, url: URL) {
 			if (!entry) return;
 			const { manifest } = await readManifest(b, id);
 			const visibility = visibilityOf(manifest).mode;
-			if (visibility === "private" && !canReadPrivate(user, entry)) {
+			if (!canSeeFiles(user, entry, manifest)) {
 				out[id] = { visibility };
 				return;
 			}
@@ -181,5 +183,9 @@ export const ALL: APIRoute = ({ params, request, locals, url }) =>
 		if (action === "settings" && (method === "GET" || method === "POST")) return ok(await settings(locals, request));
 		if (action === "columns" && method === "GET") return ok(await columns(locals, url));
 		if (action === "feed-key" && ["GET", "POST", "DELETE"].includes(method)) return ok(await feedKey(locals, request));
+		if (action === "revoke-feed-keys" && method === "POST") {
+			requireAdmin(locals);
+			return ok({ objects: await revokeAllFeedKeys(await bucket()) });
+		}
 		throw new HttpError(404, "NOT_FOUND", "Unknown document action");
 	});

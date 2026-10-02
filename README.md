@@ -23,7 +23,7 @@ A port of [WP Document Revisions](https://github.com/wp-document-revisions/wp-do
   - a `DOCUMENTS` R2 binding, in [`wrangler.jsonc`](site/wrangler.jsonc);
   - an example public listing at [`src/pages/documents/index.astro`](site/src/pages/documents/index.astro).
 - [`scripts/wpdr-export.php`](scripts/wpdr-export.php) and [`scripts/import-wpdr.mjs`](scripts/import-wpdr.mjs) — migrate from WP Document Revisions; see [Import from WordPress](#import-from-wordpress).
-- [`scripts/verify.sh`](scripts/verify.sh) — end-to-end checks (127) against a local dev server. [`scripts/verify-import.sh`](scripts/verify-import.sh) checks the importer (36) against a real WordPress in [Playground](https://wordpress.org/playground/).
+- [`scripts/verify.sh`](scripts/verify.sh) — end-to-end checks (136) against a local dev server. [`scripts/verify-import.sh`](scripts/verify-import.sh) checks the importer (36) against a real WordPress in [Playground](https://wordpress.org/playground/).
 
 ## Run it
 
@@ -52,7 +52,7 @@ To add a document, either use **Upload document** in the admin sidebar, or creat
 5. If your site lists documents, filter the list through `filterPublicDocuments()` (see the [example page](site/src/pages/documents/index.astro)).
 6. **Optional but recommended:**
    - **Text extraction.** Add a `DOC_JOBS` queue (producer and consumer) to `wrangler.jsonc`, and export the consumer from your Worker entry: `queue: documentRevisionsQueue` from `emdash-document-revisions/worker` (see [`site/src/worker.ts`](site/src/worker.ts)). Plain-text formats are extracted as-is. For PDF, Office documents and images (OCR plus a description), also bind Workers AI as `AI`; extraction then uses [Markdown Conversion](https://developers.cloudflare.com/workers-ai/features/markdown-conversion/).
-   - **Password brute-force protection.** Add a `DOC_PASSWORD_LIMIT` [rate-limit binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/) (the example allows 5 attempts per minute per visitor and document).
+   - **Password brute-force protection.** Add a `DOC_PASSWORD_LIMIT` [rate-limit binding](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/) (the example allows 5 attempts per minute per visitor and document). Cloudflare counts per location and approximately, so treat it as throttling, not an exact cap.
 
    Both are in [`site/wrangler.jsonc`](site/wrangler.jsonc). Without them, those features quietly turn off.
 
@@ -95,15 +95,15 @@ Documents with a file over the upload limit (100 MB) are reported and skipped be
 | Restore a revision | Appends the old file as a new revision ("Restored revision N"), as WordPress does |
 | `/documents/2011/08/tps-report.pdf`, `tps-report-revision-3.pdf` | Same URL shapes. The extensionless and date-prefixed forms also resolve, and a wrong extension still resolves. |
 | Files hashed and stored outside the web root | Random object keys in a separate, private R2 bucket |
-| Private / password-protected / public | Set per document in the panel. Private: Editors, Admins and the document's author. Password: PBKDF2-hashed, 10-day HttpOnly cookie, invalidated when the password changes. Titles stay out of public search and listings too; see "Private titles" below. |
+| Private / password-protected / public | Set per document in the panel. Private: Editors, Admins and the document's author. Password: PBKDF2-hashed, 10-day HttpOnly cookie, invalidated when the password changes. One rule covers every file surface (downloads, revision log, extracted text, feeds, list columns), so a password-protected document's notes and text don't leak to users who can't open it. Titles stay out of public search and listings too; see "Private titles" below. Inside the admin, Contributors still see every document's title and summary through EmDash's own content screens. |
 | Drafts and past revisions | Contributor and up (core's `content:read_drafts`), and never more open than the current file. Everything else 404s, so slugs don't leak. |
 | Authors edit only their own | Author: own documents; Editor and up: any (core's `edit_own` / `edit_any`) |
 | Check-out lock | Core's entry edit lock, which the editor already acquires, renews and lets users take over. Uploads, restores and visibility changes are refused (409) while someone else holds it, which is the same rule core applies to saves. |
 | Upload limit | Up to 95 MB in one request. Larger files go to R2 in 50 MB parts (multipart upload, with progress and retries), up to 5 GB by default (`DOCUMENT_MAX_FILE_BYTES`). The importer does the same. |
 | New documents private by default | **Document settings** page (Admins): "New documents are private", the default as in WP Document Revisions, or public. |
-| Revision RSS feed with feed key | `/documents/:slug/feed?key=…` (Atom). Each user gets a secret key from the panel (shown once, revocable, stored hashed); the feed checks the user's current role and the document's visibility on every request. |
+| Revision RSS feed with feed key | `/documents/:slug/feed?key=…` (Atom). Each user gets a secret key from the panel (shown once, revocable, stored hashed); the feed checks the user's current role and the document's visibility on every request. EmDash's plugin user lookup doesn't expose disabled accounts, so revoke a departing user's key (or everyone's, on the Document settings page). |
 | Admin list columns | **File** (type, size, revisions) and **Access** (visibility, who's editing) in the Documents list. |
-| Text extraction | A queue extracts text from every upload. The panel shows its status, and `GET …/files/text?n=` returns it. Plain-text formats are extracted locally; PDF and Office need a Workers AI binding. |
+| Text extraction | A queue extracts text from every upload. The panel shows its status, and `GET …/files/text?n=` returns it. Plain-text formats are extracted locally (the first 25 MB of a larger file, marked truncated). PDF, Office and images need a Workers AI binding; files over 25 MB are skipped there, so a huge upload never exhausts a Worker's memory. |
 | Streaming | Range requests (`206`, used by PDF viewers and media players) and `304` for an unchanged file, straight from R2. |
 | Workflow states | A taxonomy |
 | Migration | [Import from WordPress](#import-from-wordpress): full revision history, original numbering, authors, dates, notes, visibility and workflow states |
@@ -139,7 +139,7 @@ These are how EmDash 1.1 shapes the design. [docs/upstream-requests.md](docs/ups
 
 ## Verification
 
-[`scripts/verify.sh`](scripts/verify.sh) runs 127 checks against `pnpm dev`, using miniflare D1 and R2, on EmDash 1.1.0. They cover:
+[`scripts/verify.sh`](scripts/verify.sh) runs 136 checks against `pnpm dev`, using miniflare D1 and R2, on EmDash 1.1.0. They cover:
 
 - permalink shapes;
 - draft, private and password access for each role;

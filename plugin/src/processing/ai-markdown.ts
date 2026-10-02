@@ -9,9 +9,14 @@ import type { Processor } from "./index";
  * Workers AI binding marks these files "skipped".
  * https://developers.cloudflare.com/workers-ai/features/markdown-conversion/
  */
+/** Formats Markdown Conversion supports (images get OCR and a description). */
+const SUPPORTED = /\.(pdf|docx|xlsx|xlsm|xlsb|xls|et|ods|odt|numbers|csv|html?|xml|jpe?g|png|webp|svg|gif|bmp)$/i;
+
 export const aiMarkdownProcessor: Processor = {
 	name: "ai-markdown",
-	accepts: (_job, env) => typeof env.AI?.toMarkdown === "function",
+	accepts: (job, env) => typeof env.AI?.toMarkdown === "function" && SUPPORTED.test(job.filename),
+	// The whole file goes to the model; past this, skip rather than risk memory.
+	maxBytes: 25 * 1024 * 1024,
 	run: async (file, job, env) => {
 		const result = (await env.AI!.toMarkdown({
 			name: job.filename,

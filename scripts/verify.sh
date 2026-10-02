@@ -389,6 +389,39 @@ role 10
 check "columns need read-drafts" 403 "$(code -b "$TMP/jar" "$API/columns?ids=$P_ID")"
 role 50
 
+echo "File metadata follows the file rule"
+sql "update ec_documents set author_id='$OTHER' where id='$O_ID';"
+setvis "$O_ID" password meta-secret >/dev/null
+for _ in $(seq 1 20); do
+	st=$(as "$CONTENT/$O_ID/files" | python3 -c 'import json,sys; print((json.load(sys.stdin)["data"]["revisions"][0].get("text") or {}).get("status","pending"))')
+	[[ $st != pending ]] && break
+	sleep 0.5
+done
+role 20
+check "contributor (not author) can't read a password document's log" 403 "$(code -b "$TMP/jar" "$CONTENT/$O_ID/files")"
+check "...or its extracted text" 403 "$(code -b "$TMP/jar" "$CONTENT/$O_ID/files/text")"
+check "...and list columns show only its visibility" password \
+	"$(as "$API/columns?ids=$O_ID" | python3 -c 'import json,sys; r=json.load(sys.stdin)["data"][sys.argv[1]]; print(r["visibility"] if "type" not in r else "leaked")' "$O_ID")"
+role 40
+check "editor can read its extracted text" 200 "$(code -b "$TMP/jar" "$CONTENT/$O_ID/files/text")"
+role 50
+sql "update ec_documents set author_id='$dev_id' where id='$O_ID';"
+role 30
+check "its author can read the log" 200 "$(code -b "$TMP/jar" "$CONTENT/$O_ID/files")"
+role 50
+
+echo "Large text files stay within memory bounds"
+BIG_ID=$(create "verify-biglog-$RUN" "Big log $RUN")
+yes "log line with some padding to make it longer" | head -c $((40 * 1024 * 1024)) >"$TMP/big.log"
+upload "$BIG_ID" "$TMP/big.log" text/plain big.log >/dev/null
+rm -f "$TMP/big.log"
+for _ in $(seq 1 40); do
+	BIG=$(as "$CONTENT/$BIG_ID/files" | python3 -c 'import json,sys; t=json.load(sys.stdin)["data"]["revisions"][0].get("text") or {}; print(t.get("status","pending"), t.get("truncated", False))')
+	[[ $BIG != pending* ]] && break
+	sleep 0.5
+done
+check "40 MB log extracted from its first part, marked truncated" "done True" "$BIG"
+
 echo "Revision feed"
 FEED_KEY=$(as -X POST "$API/feed-key" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["key"])')
 check "feed without a key" 404 "$(code "$B/documents/$P/feed")"
@@ -414,6 +447,13 @@ role 20
 check "contributor's key can't read another's private document feed" 404 "$(code "$B/documents/$O/feed?key=$FEED_KEY")"
 role 50
 check "same key works once the user is promoted" 200 "$(code "$B/documents/$O/feed?key=$FEED_KEY")"
+FEED_KEY2=$(as -X POST "$API/feed-key" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["key"])')
+role 40
+check "revoking everyone's keys is Admin-only" 403 "$(code -b "$TMP/jar" -H "$H" -X POST "$API/revoke-feed-keys")"
+role 50
+check "Admin revokes all feed keys" 200 "$(code -b "$TMP/jar" -H "$H" -X POST "$API/revoke-feed-keys")"
+check "bulk-revoked key stops working" 404 "$(code "$B/documents/$O/feed?key=$FEED_KEY2")"
+FEED_KEY=$FEED_KEY2
 as -X DELETE "$API/feed-key" >/dev/null
 check "revoked key stops working" 404 "$(code "$B/documents/$O/feed?key=$FEED_KEY")"
 

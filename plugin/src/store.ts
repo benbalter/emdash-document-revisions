@@ -141,6 +141,15 @@ export async function issueFeedKey(b: R2Bucket, userId: string): Promise<string>
 	return key;
 }
 
+/**
+ * Revoke every user's feed key. EmDash's plugin user lookup returns disabled
+ * accounts too (and no disable hook exists), so offboarding should revoke
+ * keys; this is the bulk version for Admins.
+ */
+export async function revokeAllFeedKeys(b: R2Bucket): Promise<number> {
+	return (await deletePrefix(b, "feedkeys/")) + (await deletePrefix(b, "feedusers/"));
+}
+
 export async function revokeFeedKey(b: R2Bucket, userId: string): Promise<void> {
 	const obj = await b.get(`feedusers/${userId}`);
 	if (!obj) return;
@@ -182,7 +191,10 @@ export async function updateManifest(
 ): Promise<Manifest> {
 	for (let i = 0; i < attempts; i++) {
 		const { manifest, etag } = await readManifest(b, entryId);
-		const next = mutate(manifest ?? emptyManifest(entryId, slug));
+		// A first manifest gets the site default, so a new document stays
+		// private even if the afterSave hook that normally creates it didn't run.
+		const base = manifest ?? emptyManifest(entryId, slug, (await readSettings(b)).defaultVisibility);
+		const next = mutate(base);
 		const put = await b.put(manifestKey(entryId), JSON.stringify(next), {
 			httpMetadata: { contentType: "application/json" },
 			...(etag ? { onlyIf: { etagMatches: etag } } : {}),

@@ -19,7 +19,7 @@
 
 import type { APIRoute } from "astro";
 
-import { canEdit, canReadDrafts, canReadPrivate, hashPassword, liveLock } from "../access";
+import { canEdit, canSeeFiles, hashPassword, liveLock } from "../access";
 import type { Entry, User } from "../access";
 import { enqueue, textKey } from "../processing";
 import { handle, HttpError, ok, readJson, requireEntry, requireUser, requireWritable } from "../http";
@@ -84,9 +84,7 @@ async function revisions(locals: App.Locals, entryId: string) {
 	const entry = await requireEntry(locals, entryId, { includeTrashed: true });
 	const { manifest } = await readManifest(await bucket(), entry.id);
 	const visibility = visibilityOf(manifest);
-	if (!canReadDrafts(user) || (visibility.mode === "private" && !canReadPrivate(user, entry))) {
-		throw new HttpError(403, "FORBIDDEN", "Insufficient permissions");
-	}
+	if (!canSeeFiles(user, entry, manifest)) throw new HttpError(403, "FORBIDDEN", "Insufficient permissions");
 
 	const files = manifest?.revisions ?? [];
 	const latest = files.at(-1);
@@ -474,9 +472,7 @@ async function revisionText(locals: App.Locals, url: URL, entryId: string) {
 	const entry = await requireEntry(locals, entryId, { includeTrashed: true });
 	const b = await bucket();
 	const { manifest } = await readManifest(b, entry.id);
-	if (!canReadDrafts(user) || (visibilityOf(manifest).mode === "private" && !canReadPrivate(user, entry))) {
-		throw new HttpError(403, "FORBIDDEN", "Insufficient permissions");
-	}
+	if (!canSeeFiles(user, entry, manifest)) throw new HttpError(403, "FORBIDDEN", "Insufficient permissions");
 	const n = Number(url.searchParams.get("n"));
 	const revision = manifest?.revisions.find((r) => r.n === n) ?? (url.searchParams.has("n") ? null : manifest?.revisions.at(-1));
 	if (!revision) throw new HttpError(404, "NOT_FOUND", "Revision not found");

@@ -15,7 +15,7 @@
  *   ---
  */
 
-import { bucket, readManifest, visibilityOf, type VisibilityMode } from "./store";
+import { bucket, readManifest, readSettings, visibilityOf, type VisibilityMode } from "./store";
 
 interface EntryLike {
 	id: string;
@@ -29,7 +29,10 @@ function entryId(entry: EntryLike): string {
 }
 
 export async function documentVisibility(id: string): Promise<VisibilityMode> {
-	const { manifest } = await readManifest(await bucket(), id);
+	const b = await bucket();
+	const { manifest } = await readManifest(b, id);
+	// No manifest yet: treat it as the site default (private unless changed).
+	if (!manifest) return (await readSettings(b)).defaultVisibility;
 	return visibilityOf(manifest).mode;
 }
 

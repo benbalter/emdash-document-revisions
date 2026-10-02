@@ -135,6 +135,17 @@ export class LockCheckUnavailable extends Error {
 	}
 }
 
+/**
+ * Whether a signed-in user may see a document's file details (revision log,
+ * extracted text, list-column file info): exactly when they may download
+ * its past revisions. One rule for every surface, so a password-protected
+ * document doesn't leak through its metadata.
+ */
+export function canSeeFiles(user: User | undefined, entry: Entry, manifest: Manifest | null): boolean {
+	if (!manifest) return canReadDrafts(user);
+	return fileAccess(user, entry, manifest, { revision: true, passwordCookieValid: false }) === "allow";
+}
+
 export interface LockHolder {
 	userId: string;
 	userName: string | null;

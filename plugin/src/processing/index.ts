@@ -32,6 +32,13 @@ export interface ProcessorEnv {
 export interface Processor {
 	name: string;
 	accepts(job: Job, env: ProcessorEnv): boolean;
+	/**
+	 * Memory bounds (a Worker has ~128 MB). Files over `maxBytes` are
+	 * skipped; with `readBytes`, only that much is read and the text is
+	 * marked truncated instead.
+	 */
+	maxBytes?: number;
+	readBytes?: number;
 	/** Returns the extracted text. Throws to fail the job (it is retried). */
 	run(file: R2ObjectBody, job: Job, env: ProcessorEnv): Promise<string>;
 }

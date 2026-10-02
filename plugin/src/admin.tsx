@@ -717,6 +717,28 @@ function StoragePage() {
 					</span>
 				</label>
 			) : null}
+			<div className="space-y-1">
+				<h2 className="text-lg font-semibold">Revision feed keys</h2>
+				<p className="text-kumo-subtle">
+					Keys keep working until revoked, including for users who are later disabled. Revoke a departing user's
+					key from their panel, or everyone's here.
+				</p>
+				<button
+					type="button"
+					className="rounded border px-3 py-1"
+					disabled={busy}
+					onClick={async () => {
+						try {
+							await parseApiResponse(await postJson(`${API}/revoke-feed-keys`, {}), "Could not revoke");
+							setNotice("All feed keys revoked.");
+						} catch (cause) {
+							setError(message(cause));
+						}
+					}}
+				>
+					Revoke all feed keys
+				</button>
+			</div>
 			<h2 className="text-lg font-semibold">Storage</h2>
 			{stats ? (
 				<p>
