@@ -6,7 +6,8 @@ import { defineConfig } from "vitest/config";
  * - unit:        plugin modules in the Workers runtime (workerd), with a local
  *                R2 bucket bound as DOCUMENTS. Fast; no dev server.
  * - integration: HTTP tests against a real `astro dev` of the demo site,
- *                started by the project's globalSetup on port 4330.
+ *                started by the project's globalSetup on port 4330
+ *                (EDR_TEST_PORT moves it; import uses the next port).
  * - import:      the WordPress importer end to end (WordPress Playground,
  *                needs network). Not part of `pnpm test`; run `pnpm test:import`.
  */
