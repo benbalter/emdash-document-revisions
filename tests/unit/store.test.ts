@@ -10,6 +10,7 @@ import {
 	entryIdForSlug,
 	extensionOf,
 	feedKeyUser,
+	normalizeContentType,
 	hasFeedKey,
 	issueFeedKey,
 	listStoredEntryIds,
@@ -288,5 +289,21 @@ describe("names and URLs", () => {
 
 	it("sha256Hex", async () => {
 		expect(await sha256Hex("abc")).toBe("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+	});
+});
+
+describe("normalizeContentType", () => {
+	it.each([
+		["application/pdf", "application/pdf"],
+		["Application/PDF; charset=binary", "application/pdf"],
+		["application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+		["image/svg+xml", "image/svg+xml"],
+		["text/html\r\nX-Injected: 1", "application/octet-stream"],
+		["pdf", "application/octet-stream"],
+		["", "application/octet-stream"],
+		[null, "application/octet-stream"],
+		[42, "application/octet-stream"],
+	])("%j → %j", (raw, type) => {
+		expect(normalizeContentType(raw)).toBe(type);
 	});
 });

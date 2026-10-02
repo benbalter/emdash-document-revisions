@@ -20,6 +20,15 @@ export function candidates(segment: string): Array<{ slug: string; n: number | n
 	return out;
 }
 
+/** decodeURIComponent, but null for malformed escapes (a stray `%`) instead of throwing. */
+export function safeDecode(s: string): string | null {
+	try {
+		return decodeURIComponent(s);
+	} catch {
+		return null;
+	}
+}
+
 /** The file part of a permalink path: `slug.ext`, or WordPress's `YYYY/MM/slug.ext`. */
 export function fileSegment(path: string): string | null {
 	const parts = path.split("/").filter(Boolean);
