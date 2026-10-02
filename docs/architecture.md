@@ -65,7 +65,12 @@ These are how EmDash 1.1 shapes the design. [upstream-requests.md](upstream-requ
 8. **Revision feeds need plugin context.** Feed readers send no session, and anonymous site requests have no database. So the feed's permission check runs in a public plugin route (`feed-data`) called in-process, and the site route renders the Atom, because plugin raw responses can't serve XML.
 9. **Feed keys and disabled users.** EmDash's plugin user API doesn't say whether an account is disabled. So the feed route reads `users.disabled` from the site's D1 binding (`DOCUMENT_D1_BINDING`, default `DB`), and refuses the feed if it can't tell. Revoking keys at offboarding is still good hygiene; Document settings can revoke everyone's.
 10. **Password hashing is sized for Workers Free.** WebCrypto counts toward the Worker's CPU budget (about 10 ms on Free). These are shared access codes, not account passwords (WordPress stores post passwords in plaintext). Raise the cost on Workers Paid with `DOCUMENT_PASSWORD_ITERATIONS`. Existing hashes keep their own count.
-11. **Native plugin code doesn't hot-reload** under `astro dev`, because EmDash loads it once. When the package is a linked checkout (as in this workspace), its integration watches its own source and restarts the dev server on changes, which takes about two seconds.
+11. **Accepted risks.** Known gaps, kept on purpose:
+    - **Subscribers see restricted titles** through EmDash's content API, which grants `content:read` to every role (see [upstream request 4](upstream-requests.md#4-per-entry-read-policy-for-public-queries)). Files, logs and text stay protected.
+    - **PDFs are served inline without `Content-Security-Policy: sandbox`,** because Chrome's PDF viewer renders blank under it. Browsers' PDF viewers run in their own isolated context, and every other type that could run script is served as an attachment with the sandbox.
+    - **Password cookies have no server-side expiry.** A cookie is an HMAC over the document and its current password hash, valid for 10 days in the browser, as in WordPress. Changing the password revokes every cookie for the old one.
+    - **Revision author names fall back to the uploader's email** for users with no name, and appear in the revision log, blocks and feeds, which only Contributors and up can see.
+12. **Native plugin code doesn't hot-reload** under `astro dev`, because EmDash loads it once. When the package is a linked checkout (as in this workspace), its integration watches its own source and restarts the dev server on changes, which takes about two seconds.
 
 ## Why a native plugin, not a sandboxed one
 

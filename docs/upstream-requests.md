@@ -46,7 +46,7 @@ These are drafts of issues for [emdash-cms/emdash](https://github.com/emdash-cms
 
 **Ask.** A read-side hook, such as `content:filterPublic(entries) → entries`, applied by the public search, suggest, live-collection and sitemap paths, gated by a capability like `hooks.content-visibility:register`. Or a core `visibility` column, which would also benefit sites without this plugin.
 
-**Workaround today.** An Astro middleware that runs after EmDash's removes restricted documents from `/_emdash/api/search` and `/search/suggest` responses ([`middleware.ts`](../plugin/src/middleware.ts)), and site templates filter listings through a helper. In-process queries such as `getEmDashCollection()` stay unfiltered.
+**Workaround today.** An Astro middleware that runs after EmDash's removes restricted documents from `/_emdash/api/search` and `/search/suggest` responses ([`middleware.ts`](../plugin/src/middleware.ts)), and site templates filter listings through a helper. In-process queries such as `getEmDashCollection()` stay unfiltered, and so does EmDash's authenticated content API: every signed-in role, Subscribers included, has `content:read`, so `GET /_emdash/api/content/documents` lists the titles of private and password-protected documents to any member of the site.
 
 ---
 

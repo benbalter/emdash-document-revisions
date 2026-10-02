@@ -99,6 +99,11 @@ describe("Storage admin (stands in for plugin:uninstall)", () => {
 		expect(s.bytes).toBeGreaterThan(0);
 	});
 
+	it("storage says whether password guesses are rate limited", async () => {
+		// The demo site binds DOC_PASSWORD_LIMIT; Document settings warns when it's missing.
+		expect((await admin.json<{ passwordLimiter: boolean }>(`${API}/storage`)).passwordLimiter).toBe(true);
+	});
+
 	it("purge orphans", async () => {
 		const res = await admin.post(`${API}/purge-orphans`);
 		expect(res.status).toBe(200);
