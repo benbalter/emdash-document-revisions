@@ -1,0 +1,10 @@
+{
+  "name": "emdash-document-revisions-workspace",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm --filter site dev",
+    "typecheck": "pnpm --filter emdash-document-revisions typecheck"
+  },
+  "packageManager": "pnpm@11.9.0"
+}
