@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "emdash": {
-    "label": "Starter",
+    "label": "Blog",
     "seed": "seed/seed.json"
   },
   "scripts": {

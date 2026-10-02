@@ -1,36 +1,33 @@
 ---
 /**
- * Public document library. EmDash's queries don't know about document
- * visibility (it lives in the plugin's private manifest), so filter before
- * rendering: private and password-protected titles must not be listed.
+ * Public document library, rendered with the plugin's Document list block
+ * so it applies the same visibility rules as the block and the permalinks:
+ * visitors see public documents; editors and authors also see the private
+ * and password-protected ones they may open.
  */
-import { getEmDashCollection } from "emdash";
-import { filterPublicDocuments } from "emdash-document-revisions/visibility";
+import DocumentList from "emdash-document-revisions/astro/DocumentList.astro";
 import Base from "../../layouts/Base.astro";
 
-const { entries } = await getEmDashCollection("documents", {
-	orderBy: { published_at: "desc" },
-	limit: 50,
-});
-const documents = await filterPublicDocuments(entries);
-// Listings depend on visibility, which EmDash's cache hints can't see.
+// The list depends on who's viewing, so it must not be cached as shared.
 Astro.response.headers.set("Cache-Control", "private, no-store");
 ---
 
-<Base title="Documents">
-	<h1>Documents</h1>
-	{
-		documents.length === 0 ? (
-			<p>No documents yet.</p>
-		) : (
-			<ul>
-				{documents.map((doc) => (
-					<li>
-						<a href={`/documents/${doc.id}`}>{doc.data.title}</a>
-						{doc.data.summary && <p>{doc.data.summary}</p>}
-					</li>
-				))}
-			</ul>
-		)
-	}
+<Base title="Documents" description="Browse the document library">
+	<div class="documents-page">
+		<header class="page-header">
+			<h1 class="page-title">Documents</h1>
+		</header>
+		<DocumentList node={{ _type: "document-list", _key: "library", limit: 100, show_summary: true }} />
+	</div>
 </Base>
+
+<style>
+	.documents-page {
+		max-width: var(--content-width, 48rem);
+		margin-inline: auto;
+		padding-block: var(--space-8, 2rem);
+	}
+	.page-header {
+		margin-block-end: var(--space-6, 1.5rem);
+	}
+</style>

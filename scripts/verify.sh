@@ -250,11 +250,11 @@ role 50
 echo "Private titles stay out of public listings"
 check "public search never returns documents" 0 \
 	"$(curl -s "$B/_emdash/api/search?q=Verify" | python3 -c 'import json,sys; print(sum(i["collection"]=="documents" for i in json.load(sys.stdin)["data"]["items"]))')"
-check "listing page shows a public document" 1 "$(curl -s "$B/documents" | grep -c "href=\"/documents/$P\"")"
+check "listing page shows a public document" 1 "$(curl -s "$B/documents" | grep -c "href=\"/documents/$P\.")"
 setvis "$P_ID" password lp >/dev/null
-check "listing page hides a password-protected document" 0 "$(curl -s "$B/documents" | grep -c "href=\"/documents/$P\"")"
+check "listing page hides a password-protected document" 0 "$(curl -s "$B/documents" | grep -c "href=\"/documents/$P\.")"
 setvis "$P_ID" public >/dev/null
-check "listing page hides a private document" 0 "$(curl -s "$B/documents" | grep -c "href=\"/documents/$O\"")"
+check "listing page hides a private document" 0 "$(curl -s "$B/documents" | grep -c "href=\"/documents/$O\.")"
 
 echo "Storage admin (stands in for plugin:uninstall)"
 role 40
@@ -489,16 +489,16 @@ print(json.dumps({"slug": f"verify-blocks-{r}", "data": {"title": "Blocks", "con
 PY
 BK_PAGE=$(as -H 'Content-Type: application/json' -X POST "$B/_emdash/api/content/pages" -d @"$TMP/page.json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["item"]["id"])')
 as -H 'Content-Type: application/json' -X POST "$B/_emdash/api/content/pages/$BK_PAGE/publish" -d '{}' >/dev/null
-curl -s "$B/verify-blocks-$RUN" >"$TMP/anon.html"
-curl -s -b "$TMP/jar" "$B/verify-blocks-$RUN" >"$TMP/admin.html"
+curl -s "$B/pages/verify-blocks-$RUN" >"$TMP/anon.html"
+curl -s -b "$TMP/jar" "$B/pages/verify-blocks-$RUN" >"$TMP/admin.html"
 role 10
-curl -s -b "$TMP/jar" "$B/verify-blocks-$RUN" >"$TMP/sub.html"
+curl -s -b "$TMP/jar" "$B/pages/verify-blocks-$RUN" >"$TMP/sub.html"
 role 50
 count() { grep -o "$2" "$1" | wc -l | tr -d ' '; }
 section() { python3 - "$1" "$2" <<'PY'
 import re, sys
 html = open(sys.argv[1]).read()
-m = re.search(r'<section class="edr-documents"[^>]*>\s*<p class="edr-documents__heading"><strong>' + re.escape(sys.argv[2]) + r'</strong></p>(.*?)</section>', html, re.S)
+m = re.search(r'<section class="edr-documents"[^>]*>\s*<p class="edr-documents__heading"[^>]*><strong[^>]*>' + re.escape(sys.argv[2]) + r'</strong></p>(.*?)</section>', html, re.S)
 print(m.group(1) if m else "")
 PY
 }
@@ -510,7 +510,7 @@ check "list hides the private document from a subscriber" 0 "$(section "$TMP/sub
 check "workflow-state filter includes the final document" 1 "$(section "$TMP/anon.html" "Final only" | grep -c "Block Public $RUN")"
 check "workflow-state filter excludes others" 0 "$(section "$TMP/admin.html" "Final only" | grep -c "Block Private $RUN")"
 check "latest documents fills its limit despite filtered entries" 3 \
-	"$(python3 -c "import re,sys; h=open('$TMP/anon.html').read(); m=re.findall(r'data-block=\"latest-documents\".*?</section>', h, re.S); print(len(re.findall(r'<li>', m[0])) if m else 0)")"
+	"$(python3 -c "import re,sys; h=open('$TMP/anon.html').read(); m=re.findall(r'data-block=\"latest-documents\".*?</section>', h, re.S); print(len(re.findall(r'<li[ >]', m[0])) if m else 0)")"
 check "revision list hidden from visitors" 0 "$(count "$TMP/anon.html" 'class="edr-revisions"')"
 check "revision list hidden from subscribers" 0 "$(count "$TMP/sub.html" 'class="edr-revisions"')"
 check "revision list shown to admin" 1 "$(count "$TMP/admin.html" 'class="edr-revisions"')"

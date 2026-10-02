@@ -12,7 +12,8 @@
     "./routes/files.ts": "./src/routes/files.ts",
     "./routes/api.ts": "./src/routes/api.ts",
     "./worker": "./src/worker.ts",
-    "./astro": "./src/astro/index.ts"
+    "./astro": "./src/astro/index.ts",
+    "./astro/DocumentList.astro": "./src/astro/DocumentList.astro"
   },
   "files": [
     "src",

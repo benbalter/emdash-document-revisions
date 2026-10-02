@@ -19,10 +19,10 @@ A port of [WP Document Revisions](https://github.com/wp-document-revisions/wp-do
   - [`src/access.ts`](plugin/src/access.ts) — access rules, the core edit-lock check, and password hashing and cookies.
   - [`src/store.ts`](plugin/src/store.ts) — the private R2 store: file objects plus one JSON manifest per document, updated with an etag compare-and-swap.
   - [`src/admin.tsx`](plugin/src/admin.tsx) — the editor sidebar panel, plus the **Upload document** and **Document settings** admin pages.
-- [`site/`](site/) — EmDash's Cloudflare **starter** template, wired to the plugin. The starter ships no CSS by design ("a base you can build on rather than a finished theme"), so pages render with browser defaults; the document blocks bring their own minimal styles. It adds:
+- [`site/`](site/) — EmDash's Cloudflare **blog** template (styled; the starter template has no CSS by design), wired to the plugin. It adds:
   - a `documents` collection and a `workflow_state` taxonomy, in [`seed/seed.json`](site/seed/seed.json);
   - a `DOCUMENTS` R2 binding, in [`wrangler.jsonc`](site/wrangler.jsonc);
-  - an example public listing at [`src/pages/documents/index.astro`](site/src/pages/documents/index.astro).
+  - a public `/documents` library page ([`src/pages/documents/index.astro`](site/src/pages/documents/index.astro)) built from the Document list block, plus a **Documents** menu link.
 - [`scripts/wpdr-export.php`](scripts/wpdr-export.php) and [`scripts/import-wpdr.mjs`](scripts/import-wpdr.mjs) — migrate from WP Document Revisions; see [Import from WordPress](#import-from-wordpress).
 - [`scripts/verify.sh`](scripts/verify.sh) — end-to-end checks (151) against a local dev server. [`scripts/verify-import.sh`](scripts/verify-import.sh) checks the importer (36) against a real WordPress in [Playground](https://wordpress.org/playground/).
 
@@ -35,6 +35,11 @@ scripts/verify.sh    # in another terminal
 ```
 
 To add a document, either use **Upload document** in the admin sidebar, or create a Document and use the **Document revisions** panel in the editor sidebar.
+
+**Offline.** After `pnpm install`, local development needs no network. `astro dev` runs the site in Cloudflare's own runtime (workerd, via Miniflare), with D1, R2, Queues and the rate limiter emulated on disk under `site/.wrangler/`. No Cloudflare account or login is needed. `scripts/verify.sh` passes all its checks with outbound network blocked. The exceptions:
+- the blog theme's Google Fonts are downloaded once into `site/.astro/fonts`; with an empty cache and no network the site still works, using system fonts;
+- `scripts/verify-import.sh` downloads WordPress through Playground;
+- the optional Workers AI binding is remote by nature.
 
 ## Install into an EmDash site
 
@@ -134,7 +139,13 @@ These are how EmDash 1.1 shapes the design. [docs/upstream-requests.md](docs/ups
 7. **Permissions are fixed.** Roles are fixed (Subscriber through Admin) and plugins can't define permissions. WordPress capabilities like `read_private_documents` become rules in [`access.ts`](plugin/src/access.ts).
 8. **Editor panels only mount on saved entries.** That's why there's a separate **Upload document** page.
 9. **Native plugin code doesn't hot-reload** under `astro dev`. Restart with `npx astro dev stop && npx astro dev`.
-10. **Cloudflare only.** The R2 binding comes from `cloudflare:workers`. A Node deployment would need an S3 adapter. It also opens doors: see [Cloudflare integrations](ROADMAP.md#cloudflare-integrations).
+10. **Cloudflare only, for now.** EmDash itself runs on Node too (SQLite or Postgres, local or S3 storage). This plugin doesn't yet, because it talks to Cloudflare bindings directly:
+    - the `DOCUMENTS` R2 bucket via `cloudflare:workers`, including R2 conditional writes and multipart uploads;
+    - `FixedLengthStream`;
+    - the `DOC_JOBS` queue;
+    - the rate limiter.
+
+    Porting means a small storage interface with R2, S3 (MinIO, AWS) and local-disk implementations, an in-process fallback for the queue, and an in-memory rate limiter. See [ROADMAP](ROADMAP.md#migration-and-quality). It also opens doors: see [Cloudflare integrations](ROADMAP.md#cloudflare-integrations).
 11. **Password hashing is sized for the Free plan.** WebCrypto counts toward the Worker's CPU budget (about 10 ms on Free), so passwords default to 20k PBKDF2 iterations (about 1.4 ms on an M-series Mac). These are shared access codes, not account passwords; WordPress stores post passwords in plaintext. On Workers Paid, raise the count with the `DOCUMENT_PASSWORD_ITERATIONS` variable (10k–100k). The count is stored with each hash, so existing passwords keep working.
 12. **SSO for private documents.** EmDash supports [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) as a login method. Because every rule here uses EmDash's own roles, private documents work behind your SSO with no changes.
 13. **Revision feeds need plugin context.** Feed readers send no session, and anonymous site requests get no database. So the feed's permission check runs in a public plugin route (`feed-data`, which has the users and content APIs), called in-process; the site route renders the Atom, since plugin raw responses can't serve XML.

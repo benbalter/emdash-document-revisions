@@ -1,7 +1,7 @@
 import cloudflare from "@astrojs/cloudflare";
 import react from "@astrojs/react";
 import { d1, r2 } from "@emdash-cms/cloudflare";
-import { defineConfig } from "astro/config";
+import { defineConfig, fontProviders } from "astro/config";
 import emdash from "emdash/astro";
 import { documentRevisions, documentRevisionsRoutes } from "emdash-document-revisions";
 
@@ -20,6 +20,22 @@ export default defineConfig({
 			plugins: [documentRevisions()],
 		}),
 		documentRevisionsRoutes(),
+	],
+	fonts: [
+		{
+			provider: fontProviders.google(),
+			name: "Inter",
+			cssVariable: "--font-body",
+			weights: [400, 500, 600, 700],
+			fallbacks: ["sans-serif"],
+		},
+		{
+			provider: fontProviders.google(),
+			name: "JetBrains Mono",
+			cssVariable: "--font-mono",
+			weights: [400, 500],
+			fallbacks: ["monospace"],
+		},
 	],
 	devToolbar: { enabled: false },
 });
