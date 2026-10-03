@@ -63,3 +63,9 @@ WordPress import: [`scripts/wpdr-export.php`](scripts/wpdr-export.php) runs on t
 - `DOCUMENTS` must never be the EmDash media bucket: EmDash serves every media-bucket key publicly.
 - Where a workaround exists only because of an EmDash limitation, record the upstream change that would remove it in [`docs/upstream-requests.md`](docs/upstream-requests.md), and keep the platform constraints in [docs/architecture.md](docs/architecture.md) in sync.
 - Add tests for new behavior, and run `pnpm typecheck` plus `pnpm test` before a PR. Planned work and estimates are in [`ROADMAP.md`](ROADMAP.md).
+
+## Releasing and deploying
+
+Pushing a `v*` tag runs [`release.yml`](.github/workflows/release.yml), which publishes `plugin/` to npm and creates the GitHub release; no environment or reviewer gates it. The steps are in the README's [Releasing](README.md#releasing) section.
+
+Releases happen only after the owner explicitly approves that release. Agents may prepare the version-bump pull request, but never push a tag, create a GitHub Release, or run `npm publish`. Push branches with `git push --no-follow-tags`, so a local tag can't ride along and publish. The same approval applies to anything that changes a real Cloudflare account: `pnpm --filter site run deploy`, `wrangler deploy`, and the `wrangler r2 bucket create`, `wrangler queues create` and `wrangler secret put` setup commands.

@@ -321,6 +321,8 @@ Explain *why* in commit messages and PR descriptions. [ROADMAP.md](ROADMAP.md) l
 
 ### Releasing
 
+Release only after the owner approves it: pushing the tag publishes to npm.
+
 1. Bump `version` in [`plugin/package.json`](plugin/package.json) in a pull request and merge it.
 2. Tag the merge commit and push the tag:
    ```sh
