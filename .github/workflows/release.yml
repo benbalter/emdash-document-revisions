@@ -25,7 +25,7 @@ jobs:
       contents: write # gh release create
       id-token: write # npm trusted publishing
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7
       # Fail before testing if the tag and the package disagree, so a mistyped
       # tag can't publish a version nobody meant to release.
       - name: Check the tag matches plugin/package.json
@@ -37,9 +37,9 @@ jobs:
             echo "::error::Tag $TAG doesn't match plugin/package.json version $version"
             exit 1
           fi
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@v6
       # Node 24 bundles npm 11, which trusted publishing needs (11.5.1+).
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
